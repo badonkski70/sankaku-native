@@ -1,0 +1,153 @@
+package com.sankaku.nativ
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.ContentValues
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Environment
+import android.provider.MediaStore
+import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+
+private val dlClient by lazy { OkHttpClient.Builder().build() }
+
+private fun mimeOf(ext: String) = when (ext.lowercase()) {
+    "mp4" -> "video/mp4"
+    "webm" -> "video/webm"
+    "mov" -> "video/quicktime"
+    "png" -> "image/png"
+    "jpg", "jpeg" -> "image/jpeg"
+    "webp" -> "image/webp"
+    "gif" -> "image/gif"
+    "avif" -> "image/avif"
+    else -> "application/octet-stream"
+}
+
+/** In-app download with progress. Returns (content uri, bytes), throws otherwise. */
+suspend fun Context.fetchToDownloads(
+    url: String,
+    filename: String,
+    mime: String,
+    onProgress: (done: Long, total: Long) -> Unit,
+): Pair<Uri, Long> = withContext(Dispatchers.IO) {
+    var last: Exception? = null
+    repeat(2) {
+        try {
+            return@withContext downloadOnce(url, filename, mime, onProgress)
+        } catch (e: Exception) {
+            last = e
+        }
+    }
+    throw last!!
+}
+
+private fun Context.downloadOnce(
+    url: String,
+    filename: String,
+    mime: String,
+    onProgress: (Long, Long) -> Unit,
+): Pair<Uri, Long> {
+    val req = Request.Builder().url(url).header("User-Agent", "SankakuNative/0.1").build()
+    dlClient.newCall(req).execute().use { res ->
+        if (!res.isSuccessful) throw java.io.IOException("HTTP ${res.code}")
+        val body = res.body ?: throw java.io.IOException("empty body")
+        val total = body.contentLength()
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, filename)
+            put(MediaStore.Downloads.MIME_TYPE, mime)
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        }
+        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw java.io.IOException("mediastore failed")
+        var done = 0L
+        try {
+            contentResolver.openOutputStream(uri)?.use { out ->
+                body.byteStream().use { `in` ->
+                    val buf = ByteArray(256 * 1024)
+                    while (true) {
+                        val n = `in`.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        done += n
+                        onProgress(done, total)
+                    }
+                }
+            } ?: throw java.io.IOException("open failed")
+        } catch (e: Exception) {
+            contentResolver.delete(uri, null, null)
+            throw e
+        }
+        return uri to done
+    }
+}
+
+private const val DL_CHANNEL = "downloads"
+
+private fun Context.dlNotify() =
+    getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+fun Context.ensureDlChannel() {
+    val nm = dlNotify()
+    if (nm.getNotificationChannel(DL_CHANNEL) == null)
+        nm.createNotificationChannel(NotificationChannel(DL_CHANNEL, "Downloads", NotificationManager.IMPORTANCE_LOW))
+}
+
+/** Download with system notification (progress → complete/failed, tap to open). */
+suspend fun Context.downloadPost(post: Post, url: String, onProgress: (Long, Long) -> Unit): Long {
+    ensureDlChannel()
+    val nm = dlNotify()
+    val nid = post.id.hashCode()
+    val filename = "sankaku-${post.id}.${extOf(post)}"
+    val mime = mimeOfPost(post)
+    val ongoing = NotificationCompat.Builder(this, DL_CHANNEL)
+        .setSmallIcon(android.R.drawable.stat_sys_download)
+        .setContentTitle("Downloading $filename")
+        .setOngoing(true).setOnlyAlertOnce(true)
+    nm.notify(nid, ongoing.setProgress(0, 0, true).build())
+    var lastT = 0L
+    try {
+        val (uri, bytes) = fetchToDownloads(url, filename, mime) { d, t ->
+            onProgress(d, t)
+            val now = System.currentTimeMillis()
+            if (now - lastT > 500) {
+                lastT = now
+                val pct = if (t > 0) (100 * d / t).toInt() else 0
+                nm.notify(
+                    nid, ongoing.setProgress(100, pct, t <= 0)
+                        .setContentText(if (t > 0) "$pct%" else "${d / 1024} KB").build(),
+                )
+            }
+        }
+        val open = PendingIntent.getActivity(
+            this, nid,
+            Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        nm.notify(
+            nid, NotificationCompat.Builder(this, DL_CHANNEL)
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentTitle("Download complete").setContentText(filename)
+                .setContentIntent(open).setAutoCancel(true).build(),
+        )
+        PrefsStore(this).addHistory(DlEntry(post.id, filename, mime, uri.toString(), bytes, System.currentTimeMillis()))
+        return bytes
+    } catch (e: Exception) {
+        nm.notify(
+            nid, NotificationCompat.Builder(this, DL_CHANNEL)
+                .setSmallIcon(android.R.drawable.stat_sys_warning)
+                .setContentTitle("Download failed").setContentText(e.message)
+                .setAutoCancel(true).build(),
+        )
+        throw e
+    }
+}
+
+fun extOf(post: Post) = post.fileExt.ifEmpty { "bin" }
+fun mimeOfPost(post: Post) = mimeOf(extOf(post))
