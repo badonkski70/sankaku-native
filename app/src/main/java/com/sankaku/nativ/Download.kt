@@ -103,7 +103,7 @@ suspend fun Context.downloadPost(post: Post, url: String, onProgress: (Long, Lon
     ensureDlChannel()
     val nm = dlNotify()
     val nid = post.id.hashCode()
-    val filename = "sankaku-${post.id}.${extOf(post)}"
+    val filename = downloadName(post)
     val mime = mimeOfPost(post)
     val ongoing = NotificationCompat.Builder(this, DL_CHANNEL)
         .setSmallIcon(android.R.drawable.stat_sys_download)
@@ -151,3 +151,31 @@ suspend fun Context.downloadPost(post: Post, url: String, onProgress: (Long, Lon
 
 fun extOf(post: Post) = post.fileExt.ifEmpty { "bin" }
 fun mimeOfPost(post: Post) = mimeOf(extOf(post))
+
+private const val TAG_ARTIST = 1
+private const val TAG_COPYRIGHT = 3
+private const val TAG_CHARACTER = 4
+
+/** Display form of the first tag of [type]; nameEn reads "Letho Rin", tagName "letho_rin". */
+private fun Post.tagOfType(type: Int): String? =
+    tags.firstOrNull { it.type == type }
+        ?.let { it.nameEn.ifEmpty { it.tagName } }
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
+/**
+ * "artist - character.ext", e.g. "goon - el goonio.mp4". Falls back to the
+ * copyright tag, then the post id, so a file is never nameless.
+ */
+fun downloadName(post: Post): String {
+    val label = listOfNotNull(post.tagOfType(TAG_ARTIST), post.tagOfType(TAG_CHARACTER))
+        .joinToString(" - ")
+        .ifBlank { post.tagOfType(TAG_COPYRIGHT) ?: post.id }
+    val safe = label
+        .replace(Regex("""[\\/:*?"<>|]"""), "")
+        .replace(Regex("""\s+"""), " ")
+        .trim()
+        .take(80)
+        .ifBlank { post.id }
+    return "$safe.${extOf(post)}"
+}
