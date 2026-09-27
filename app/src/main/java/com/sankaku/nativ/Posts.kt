@@ -8,6 +8,10 @@ import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFact
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -69,6 +73,17 @@ interface SankakuApi {
      */
     @POST("posts/{id}/favorite")
     suspend fun favorite(@Path("id") id: String): ResponseBody
+
+    /**
+     * Returns a positional array, not objects: [0] the query echoed back,
+     * [1] the suggested tag names, [2..] post counts parallel to [1].
+     * Route taken from the official site's api layer.
+     */
+    @GET("tags/autosuggest")
+    suspend fun tagSuggest(
+        @Query("tag") tag: String,
+        @Query("limit") limit: Int = 10,
+    ): JsonElement
 
     @DELETE("posts/{id}/favorite")
     suspend fun unfavorite(@Path("id") id: String): ResponseBody

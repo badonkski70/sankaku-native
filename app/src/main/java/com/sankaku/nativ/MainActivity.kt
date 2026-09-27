@@ -71,6 +71,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -111,6 +112,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -118,6 +120,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import retrofit2.HttpException
 
 /** Progress of the single download running in the ViewModel. */
@@ -392,6 +397,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val downloadTree: Flow<String?> = prefs.downloadTree
 
     fun setDownloadTree(uri: String?) = viewModelScope.launch { prefs.setDownloadTree(uri) }
+
+    /** Tag suggestions for the search box; empty when there are none. */
+    suspend fun suggestTags(q: String): List<String> {
+        if (q.isBlank()) return emptyList()
+        return runCatching {
+            val arr = Api.service.tagSuggest(q) as? JsonArray ?: return emptyList()
+            arr.getOrNull(1)?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+        }.getOrDefault(emptyList())
+    }
 
     fun toggleFav(post: Post) = viewModelScope.launch {
         val wasFav = favList.value.any { it.id == post.id }
@@ -675,6 +689,21 @@ fun BrowseScreen(
     val ratings by vm.ratings.collectAsState()
     val columns by vm.columns.collectAsState()
     val items = vm.posts.collectAsLazyPagingItems()
+    var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
+    // only the last tag in the box is what we're completing
+    val completing = remember(text) { text.trim().split(' ').lastOrNull().orEmpty() }
+
+    LaunchedEffect(completing) {
+        // debounce: one request per pause in typing, not per keystroke
+        delay(280)
+        suggestions = vm.suggestTags(completing)
+    }
+
+    fun addTag(tag: String) {
+        val head = text.trimStart().trimEnd().removeSuffix(tag).trim()
+        text = if (head.isEmpty()) "$tag " else "$head $tag "
+        suggestions = emptyList()
+    }
 
     Column(Modifier.fillMaxSize()) {
         SearchBar(
@@ -682,7 +711,7 @@ fun BrowseScreen(
                 SearchBarDefaults.InputField(
                     query = text,
                     onQueryChange = { text = it },
-                    onSearch = { vm.search(text) },
+                    onSearch = { vm.search(text); suggestions = emptyList() },
                     expanded = false,
                     onExpandedChange = {},
                     placeholder = { Text("tags, e.g. touhou rating:safe") },
@@ -696,6 +725,24 @@ fun BrowseScreen(
         Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("s" to "Safe", "q" to "Questionable", "e" to "Explicit").forEach { (r, label) ->
                 FilterChip(selected = r in ratings, onClick = { vm.toggleRating(r) }, label = { Text(label) })
+            }
+        }
+        if (suggestions.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+                Column(Modifier.padding(vertical = 4.dp)) {
+                    suggestions.forEach { tag ->
+                        TextButton(
+                            onClick = { addTag(tag) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                tag.replace('_', ' '),
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
             }
         }
         Box(Modifier.fillMaxSize()) {
