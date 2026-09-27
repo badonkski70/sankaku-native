@@ -27,13 +27,15 @@ import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
+// java.io.Serializable as well as kotlinx: rememberSaveable puts these in a
+// Bundle on rotation, and Bundle only takes Serializable/PParcelable.
 @Serializable
 data class Tag(
     @SerialName("name_en") val nameEn: String = "",
     val type: Int = 0,
     val count: Int = 0,
     @SerialName("tagName") val tagName: String = "",
-)
+) : java.io.Serializable
 
 @Serializable
 data class Post(
@@ -50,7 +52,7 @@ data class Post(
     @SerialName("fav_count") val favCount: Int = 0,
     @SerialName("redirect_to_signup") val redirectToSignup: Boolean = false,
     val tags: List<Tag> = emptyList(),
-) {
+) : java.io.Serializable {
     val isVideo get() = fileType.startsWith("video")
     val bestUrl get() = sampleUrl.ifEmpty { fileUrl }.ifEmpty { previewUrl }
     val tagString get() = tags.take(12).joinToString(" ") { it.tagName.ifEmpty { it.nameEn } }

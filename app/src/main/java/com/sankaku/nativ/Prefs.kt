@@ -47,7 +47,7 @@ data class DlEntry(
     val uri: String,
     val bytes: Long,
     val at: Long,
-)
+) : java.io.Serializable
 
 @Serializable
 data class Account(val name: String, val email: String = "")

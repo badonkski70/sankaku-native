@@ -2,18 +2,12 @@
 
 ## Manual tests
 
-None of these have been run. The first two are suspicions, not known bugs —
-both are things that were implemented without much thought and would only
-fail in ways that show up much later.
+None of these have been run.
 
 1. **Set a custom download folder, restart the phone, then download
    something.** Android can revoke a folder permission across a reboot. If
    that happens, downloads to that folder fail and it would only surface
    weeks later. Fix would be re-picking the folder in Settings.
-
-2. **Rotate the phone sideways and back.** Search text, multi-select and
-   the suggestion list all use `remember`, which is lost on rotation. If
-   they vanish it is a real bug; the fix is `rememberSaveable`.
 
 3. **Favourite 10–12 posts in one go.** Batch favouriting works, but has
    only been tried with two or three. Each is a separate API call, so this
@@ -39,6 +33,15 @@ fail in ways that show up much later.
    means the app cannot obtain its second token by itself. Settings should
    prompt for one to "enable full browsing"; if the prompt is missing or
    confusing, that needs fixing.
+
+## Fixed
+
+- ~~Rotation lost everything in `remember`.~~ Now `rememberSaveable`
+  throughout, verified on device: search text, selected tab, multi-select
+  (a custom saver, since the maps hold whole `Post`s), the open post, the
+  duplicate dialog, settings fields, image zoom and video position all
+  survive a rotation. `TextFieldValue` needed an explicit saver — it has
+  no auto-registered one, and the app crashed on launch without it.
 
 ## Code
 

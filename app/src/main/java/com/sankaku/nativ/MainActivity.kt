@@ -76,7 +76,10 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -477,9 +480,9 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalAnimationGraphicsApi::class)
 @Composable
 fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
-    var tab by remember { mutableStateOf(0) }
-    var selected by remember { mutableStateOf<Post?>(null) }
-    val picking = remember { mutableStateMapOf<String, Post>() }
+    var tab by rememberSaveable { mutableStateOf(0) }
+    var selected by rememberSaveable { mutableStateOf<Post?>(null) }
+    val picking = rememberSaveableMap<String, Post>()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
@@ -699,6 +702,18 @@ private fun PagingError(items: LazyPagingItems<Post>, modifier: Modifier = Modif
     }
 }
 
+/**
+ * A SnapshotStateMap has no default saver, and both selection maps hold real
+ * data, not just keys -- a whole Post or DlEntry. Saving a Serializable
+ * HashMap works only because those two types are Serializable.
+ */
+@Composable
+fun <K : Any, V : Any> rememberSaveableMap(): SnapshotStateMap<K, V> =
+    rememberSaveable(saver = Saver<SnapshotStateMap<K, V>, HashMap<K, V>>(
+        save = { HashMap(it) },
+        restore = { mutableStateMapOf<K, V>().apply { putAll(it) } },
+    )) { mutableStateMapOf() }
+
 private fun Throwable.messageOrDetail(): String = when (this) {
     is HttpException -> "HTTP ${code()}"
     is IOException -> shortMessage()
@@ -736,7 +751,9 @@ fun BrowseScreen(
     // TextFieldValue rather than a plain String so a chosen tag can put the
     // cursor at the end. SearchBar's InputField takes a String and has no way to
     // move the caret, and on 1.3.1 there is no TextFieldState overload either.
-    var query by remember { mutableStateOf(TextFieldValue("")) }
+    // TextFieldValue has no auto-registered saver -- without this the app
+    // crashes on launch with "cannot be saved using the current SaveableStateRegistry"
+    var query by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     val text = query.text
     val ratings by vm.ratings.collectAsState()
     val columns by vm.columns.collectAsState()
@@ -956,7 +973,7 @@ fun DownloadsScreen(vm: MainViewModel) {
     val names = display.first
     val collided = display.second
     val ctx = LocalContext.current
-    val picking = remember { mutableStateMapOf<String, DlEntry>() }
+    val picking = rememberSaveableMap<String, DlEntry>()
     Column(Modifier.fillMaxSize()) {
         if (history.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No downloads yet") }
@@ -1048,10 +1065,10 @@ fun SettingsScreen(vm: MainViewModel) {
     val blacklist by vm.blacklist.collectAsState()
     val account by vm.account.collectAsState()
     val loginError by vm.loginError.collectAsState()
-    var blText by remember(blacklist) { mutableStateOf(blacklist.joinToString(", ")) }
-    var loginText by remember { mutableStateOf("") }
-    var passText by remember { mutableStateOf("") }
-    var tokenText by remember { mutableStateOf("") }
+    var blText by rememberSaveable(blacklist) { mutableStateOf(blacklist.joinToString(", ")) }
+    var loginText by rememberSaveable { mutableStateOf("") }
+    var passText by rememberSaveable { mutableStateOf("") }
+    var tokenText by rememberSaveable { mutableStateOf("") }
     val ctx = LocalContext.current
     val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -1202,8 +1219,10 @@ fun ViewerDialog(post: Post, vm: MainViewModel, ensureNotif: () -> Unit, onSearc
 
 @Composable
 fun ZoomableImage(url: String) {
-    var scale by remember { mutableStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
+    var scale by rememberSaveable { mutableStateOf(1f) }
+    var ox by rememberSaveable { mutableStateOf(0f) }
+    var oy by rememberSaveable { mutableStateOf(0f) }
+    val offset = Offset(ox, oy)
     AsyncImage(
         model = url,
         contentDescription = null,
@@ -1213,7 +1232,8 @@ fun ZoomableImage(url: String) {
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     scale = (scale * zoom).coerceIn(1f, 5f)
-                    offset = if (scale > 1f) offset + pan else Offset.Zero
+                    val o = if (scale > 1f) offset + pan else Offset.Zero
+                    ox = o.x; oy = o.y
                 }
             },
     )
@@ -1222,12 +1242,16 @@ fun ZoomableImage(url: String) {
 @Composable
 fun VideoPlayer(url: String) {
     val ctx = LocalContext.current
+    // the player can't be saved, but the position can, so a rotation doesn't
+    // restart the video from the beginning
+    var pos by rememberSaveable { mutableStateOf(0L) }
     val exo = remember(url) {
         ExoPlayer.Builder(ctx).build().apply {
             setMediaItem(MediaItem.fromUri(url)); prepare(); playWhenReady = true
+            if (pos > 0) seekTo(pos)
         }
     }
-    DisposableEffect(exo) { onDispose { exo.release() } }
+    DisposableEffect(exo) { onDispose { pos = exo.currentPosition; exo.release() } }
     AndroidView(factory = { PlayerView(it).apply { player = exo } }, modifier = Modifier.fillMaxSize())
 }
 
