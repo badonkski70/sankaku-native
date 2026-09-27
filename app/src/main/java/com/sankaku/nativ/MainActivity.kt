@@ -357,18 +357,13 @@ private fun Throwable.messageOrDetail(): String = when (this) {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-/** Loading feedback: a top bar while refreshing a grid that has content, a centred
- *  spinner on the very first load when there is nothing to show yet. */
+/** Loading feedback. The Box must fillMaxSize or the indicator collapses to its
+ *  intrinsic size and lands in the corner. */
 @Composable
 private fun PagingLoading(items: LazyPagingItems<Post>, modifier: Modifier = Modifier) {
-    val firstLoad = items.loadState.refresh is LoadState.Loading && items.itemCount == 0
-    val refresh = items.loadState.refresh is LoadState.Loading && items.itemCount > 0
-    Box(modifier) {
-        if (firstLoad) {
-            CircularProgressIndicator(Modifier.align(Alignment.Center))
-        } else if (refresh) {
-            LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
-        }
+    if (items.loadState.refresh !is LoadState.Loading) return
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator()
     }
 }
 
