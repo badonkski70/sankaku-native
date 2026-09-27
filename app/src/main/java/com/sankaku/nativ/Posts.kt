@@ -255,6 +255,8 @@ class PostsPagingSource(
     private val tags: String,
     private val ratings: Set<String> = setOf("s", "q", "e"),
     private val blacklist: Set<String> = emptySet(),
+    private val order: String = "",
+    private val media: String = "",
 ) : PagingSource<Int, Post>() {
     override suspend fun load(params: LoadParams<Int>): LoadResult<Int, Post> {
         val page = params.key ?: 1
@@ -265,6 +267,11 @@ class PostsPagingSource(
             // (snackbar__account_regular_excluded-tags-limit).
             val serverTags = buildString {
                 if (tags.isNotBlank()) append(tags.trim())
+                // filters are ordinary tags on this API, same as the site: order:date,
+                // order:popularity, the bare "video", and file_type:gif (verified)
+                listOf(order, if (media == "images") "" else media)
+                    .filter { it.isNotBlank() }
+                    .forEach { if (isNotEmpty()) append(' '); append(it) }
                 if (ratings.size == 1) {
                     if (isNotEmpty()) append(' ')
                     append("rating:").append(RATING_TAG[ratings.first()] ?: ratings.first())
@@ -275,6 +282,11 @@ class PostsPagingSource(
                 .filter { !it.redirectToSignup && (it.previewUrl.isNotBlank() || it.bestUrl.isNotBlank()) }
                 .filter { it.rating.firstOrNull()?.lowercase() in ratings }
                 .filter { it.tagNames.intersect(blacklist).isEmpty() }
+                // "image" is the only type with no server-side tag: -video is rejected
+                // for non-premium accounts, so it has to be filtered after the fetch
+                .filter {
+                    media != "images" || (!it.isVideo && !it.fileType.contains("gif", true))
+                }
             LoadResult.Page(
                 data = posts,
                 prevKey = if (page == 1) null else page - 1,
@@ -289,7 +301,14 @@ class PostsPagingSource(
         state.anchorPosition?.let { state.closestPageToPosition(it)?.prevKey?.plus(1) }
 }
 
-fun postsPager(tags: String, ratings: Set<String> = setOf("s", "q", "e"), blacklist: Set<String> = emptySet()) =
-    Pager(PagingConfig(pageSize = 40, prefetchDistance = 10)) {
-        PostsPagingSource(tags = tags, ratings = ratings, blacklist = blacklist)
-    }.flow
+fun postsPager(
+    tags: String,
+    ratings: Set<String> = setOf("s", "q", "e"),
+    blacklist: Set<String> = emptySet(),
+    order: String = "",
+    media: String = "",
+) = Pager(PagingConfig(pageSize = 40, prefetchDistance = 10)) {
+    PostsPagingSource(
+        tags = tags, ratings = ratings, blacklist = blacklist, order = order, media = media,
+    )
+}.flow

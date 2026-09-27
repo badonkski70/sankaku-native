@@ -201,10 +201,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val needsApiToken: Flow<Boolean> =
         combine(prefs.account, prefs.apiTokenFlow) { a, t -> a != null && t == null }
 
+    val order = MutableStateFlow("")
+    val media = MutableStateFlow("")
+    fun setOrder(v: String) { order.value = v }
+    fun setMedia(v: String) { media.value = v }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val posts: Flow<PagingData<Post>> =
-        combine(query, ratings, blacklist, authBump) { q, r, b, _ -> Triple(q, r, b) }
-            .flatMapLatest { (q, r, b) -> postsPager(q, r, b) }
+        // nested: combine tops out at five flows and there are six inputs
+        combine(
+            combine(query, ratings, blacklist, authBump) { q, r, b, _ -> Triple(q, r, b) },
+            combine(order, media) { o, m -> o to m },
+        ) { (q, r, b), (o, m) -> postsPager(q, r, b, o, m) }
+            .flatMapLatest { it }
             .cachedIn(viewModelScope)
 
     /**
@@ -601,6 +610,25 @@ private fun DupDialog(vm: MainViewModel) {
     )
 }
 
+/** One labelled row of filter chips, matching the rating chips below it. */
+@Composable
+private fun FilterRow(label: String, content: @Composable RowScope.() -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, end = 8.dp, top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        content()
+    }
+}
+
 /** Replaces the nav bar while items are picked. Actions are supplied by the caller
  *  so the grid (favourite/download) and downloads (delete) share one bar. */
 @Composable
@@ -735,6 +763,27 @@ fun BrowseScreen(
             ),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
         )
+        val order by vm.order.collectAsState()
+        val media by vm.media.collectAsState()
+        FilterRow("Order") {
+            listOf(
+                "" to "Default",
+                "order:date" to "Date",
+                "order:popularity" to "Popularity",
+            ).forEach { (v, label) ->
+                FilterChip(selected = order == v, onClick = { vm.setOrder(v) }, label = { Text(label) })
+            }
+        }
+        FilterRow("Type") {
+            listOf(
+                "" to "Any",
+                "images" to "Image",
+                "video" to "Video",
+                "file_type:gif" to "GIF",
+            ).forEach { (v, label) ->
+                FilterChip(selected = media == v, onClick = { vm.setMedia(v) }, label = { Text(label) })
+            }
+        }
         Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("s" to "Safe", "q" to "Questionable", "e" to "Explicit").forEach { (r, label) ->
                 FilterChip(selected = r in ratings, onClick = { vm.toggleRating(r) }, label = { Text(label) })
