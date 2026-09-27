@@ -188,6 +188,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 prefs.saveApiToken(res.accessToken)
                 AuthState.apiHeader = "${res.tokenType.ifBlank { "Bearer" }} ${res.accessToken}"
                 AuthState.apiRefreshToken = res.refreshToken.ifBlank { null }
+                if (res.refreshToken.isNotBlank()) {
+                    prefs.saveRefresh(prefs.refreshFlow.first() ?: "", res.refreshToken)
+                }
                 android.util.Log.i("SankakuAuth", "api login: refresh_token present=${res.refreshToken.isNotBlank()}")
                 authBump.value += 1
             }
@@ -239,6 +242,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val res = Api.authService.token(LoginBody(login.trim(), password))
                     prefs.saveAccount(res.accessToken, res.tokenType, res.currentUser.name, res.currentUser.email ?: "")
                     AuthState.refreshToken = res.refreshToken.ifBlank { null }
+                    // must be written here too, not just on rotation: the
+                    // onToken callback only fires from Api.refresh()
+                    if (res.refreshToken.isNotBlank()) {
+                        prefs.saveRefresh(res.refreshToken, prefs.apiRefreshFlow.first())
+                    }
                     android.util.Log.i("SankakuAuth", "login: refresh_token present=${res.refreshToken.isNotBlank()}")
                 }
                 AuthState.header = prefs.authHeader.first()
