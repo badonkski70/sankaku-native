@@ -83,14 +83,21 @@ class PrefsStore(private val ctx: Context) {
     suspend fun setColumns(v: Int) { ctx.dataStore.edit { it[PrefKeys.columns] = v } }
     suspend fun setBlacklist(v: Set<String>) { ctx.dataStore.edit { it[PrefKeys.blacklist] = v } }
 
-    suspend fun toggleFav(post: Post) {
+    /** Explicit set, not a toggle — bulk selection needs "make these favourites",
+     *  which a toggle would invert for anything already hearted. */
+    suspend fun setFav(post: Post, fav: Boolean) {
         ctx.dataStore.edit { prefs ->
             val cur = (prefs[PrefKeys.favs] ?: emptySet()).toMutableSet()
-            val existing = cur.firstOrNull { runCatching { json.decodeFromString<Post>(it).id == post.id }.getOrDefault(false) }
-            if (existing != null) cur.remove(existing)
-            else cur.add(json.encodeToString(Post.serializer(), post))
+            cur.removeAll { runCatching { json.decodeFromString<Post>(it).id == post.id }.getOrDefault(false) }
+            if (fav) cur.add(json.encodeToString(Post.serializer(), post))
             prefs[PrefKeys.favs] = cur
         }
+    }
+
+    suspend fun toggleFav(post: Post) {
+        val cur = ctx.dataStore.data.first()[PrefKeys.favs]
+        val was = cur?.any { runCatching { json.decodeFromString<Post>(it).id == post.id }.getOrDefault(false) } == true
+        setFav(post, !was)
     }
 
     suspend fun addHistory(e: DlEntry) {

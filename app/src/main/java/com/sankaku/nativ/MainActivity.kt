@@ -13,7 +13,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -52,6 +56,8 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SearchBar
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Slider
@@ -64,6 +70,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -226,6 +233,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * best-effort mirrors to the account when signed in — the favourites tab reads
      * the account, so without the write the heart would look like it did nothing.
      */
+    /** Bulk apply for multi-select. [fav] is explicit so it can't invert. */
+    fun setFavs(posts: List<Post>, fav: Boolean) = viewModelScope.launch {
+        posts.forEach { prefs.setFav(it, fav) }
+        if (account.value != null) {
+            posts.forEach { p ->
+                runCatching { if (fav) Api.service.favorite(p.id) else Api.service.unfavorite(p.id) }
+            }
+            authBump.value += 1
+        }
+    }
+
     fun toggleFav(post: Post) = viewModelScope.launch {
         val wasFav = favList.value.any { it.id == post.id }
         prefs.toggleFav(post)
@@ -275,10 +293,25 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
     var tab by remember { mutableStateOf(0) }
     var selected by remember { mutableStateOf<Post?>(null) }
+    val picking = remember { mutableStateMapOf<String, Post>() }
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
     val openPost: (Post) -> Unit = { selected = it }
     val searchTag: (String) -> Unit = { vm.search(it); tab = 0 }
 
+    fun enterSelection(p: Post) { picking[p.id] = p }
+    fun toggleSelection(p: Post) {
+        if (picking.remove(p.id) == null) picking[p.id] = p
+    }
+    // tapping a card means "select" once selection is active, else "open"
+    val onCardTap: (Post) -> Unit = { p ->
+        if (picking.isNotEmpty()) toggleSelection(p) else openPost(p)
+    }
+    val chosen = picking.values.toList()
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             if (AuthState.expired.collectAsState().value) {
                 Surface(color = MaterialTheme.colorScheme.errorContainer) {
@@ -291,7 +324,37 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
             }
         },
         bottomBar = {
-            NavigationBar {
+            if (picking.isNotEmpty()) {
+                SelectionBar(
+                    count = chosen.size,
+                    onDownload = {
+                        val list = chosen
+                        picking.clear()
+                        ensureNotif()
+                        scope.launch {
+                            // ponytail: sequential so a big pick doesn't hammer the
+                            // server; a queue/WorkManager if this ever gets long
+                            var ok = 0
+                            list.forEach { p ->
+                                runCatching {
+                                    ctx.downloadPost(p, p.fileUrl.ifEmpty { p.bestUrl }) { _, _ -> }
+                                }.onSuccess { ok++ }
+                            }
+                            snackbar.showSnackbar(
+                                if (ok == list.size) "Downloaded $list.size" else "Downloaded $ok of ${list.size}"
+                            )
+                        }
+                    },
+                    onFavorite = {
+                        val list = chosen
+                        picking.clear()
+                        vm.setFavs(list, true)
+                        scope.launch { snackbar.showSnackbar("Added ${list.size} to favourites") }
+                    },
+                    onClear = { picking.clear() },
+                )
+            } else {
+                NavigationBar {
                 listOf(
                     Triple("Browse", R.drawable.anim_nav_browse, R.drawable.nav_browse_off),
                     Triple("Favorites", R.drawable.anim_nav_favorites, R.drawable.nav_favorites_off),
@@ -319,18 +382,60 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
                     )
                 }
             }
+            }
         },
     ) { pad ->
         Box(Modifier.padding(pad)) {
             when (tab) {
-                0 -> BrowseScreen(vm, openPost)
-                1 -> FavoritesScreen(vm, openPost)
+                0 -> BrowseScreen(vm, onCardTap, ::enterSelection, picking)
+                1 -> FavoritesScreen(vm, onCardTap, ::enterSelection, picking)
                 2 -> DownloadsScreen(vm)
                 else -> SettingsScreen(vm)
             }
         }
     }
     selected?.let { ViewerDialog(it, vm, ensureNotif, onSearchTag = { searchTag(it); selected = null }) { selected = null } }
+}
+
+/** Replaces the nav bar while posts are picked. */
+@Composable
+private fun SelectionBar(count: Int, onDownload: () -> Unit, onFavorite: () -> Unit, onClear: () -> Unit) {
+    Surface(tonalElevation = 3.dp) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            TextButton(onClick = onClear) { Text("✕") }
+            Text("$count selected", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            TextButton(onClick = onFavorite) { Text("♥ Favourite") }
+            TextButton(onClick = onDownload) { Text("⬇ Download") }
+        }
+    }
+}
+
+/** Grid card that long-presses into selection and shows what is picked. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SelectableCard(
+    post: Post,
+    picked: Boolean,
+    onTap: (Post) -> Unit,
+    onLongPress: (Post) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Card(
+        Modifier
+            .padding(4.dp)
+            .then(
+                if (picked) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
+                else Modifier
+            )
+            .combinedClickable(
+                onClick = { onTap(post) },
+                onLongClick = { onLongPress(post) },
+            )
+    ) { content() }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -369,7 +474,12 @@ private fun PagingLoading(items: LazyPagingItems<Post>, modifier: Modifier = Mod
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BrowseScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
+fun BrowseScreen(
+    vm: MainViewModel,
+    onOpen: (Post) -> Unit,
+    onLongPress: (Post) -> Unit = {},
+    picking: Map<String, Post> = emptyMap(),
+) {
     var text by remember { mutableStateOf("") }
     val ratings by vm.ratings.collectAsState()
     val columns by vm.columns.collectAsState()
@@ -401,7 +511,7 @@ fun BrowseScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
             LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(columns), modifier = Modifier.fillMaxSize()) {
                 items(items.itemCount) { i ->
                     items[i]?.let { post ->
-                        Card(Modifier.padding(4.dp).clickable { onOpen(post) }) {
+                        SelectableCard(post, post.id in picking, onOpen, onLongPress) {
                             Box {
                                 AsyncImage(
                                     model = post.previewUrl.ifEmpty { post.bestUrl },
@@ -468,7 +578,12 @@ private fun CachedThumb(post: Post, onOpen: () -> Unit) {
 }
 
 @Composable
-fun FavoritesScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
+fun FavoritesScreen(
+    vm: MainViewModel,
+    onOpen: (Post) -> Unit,
+    onLongPress: (Post) -> Unit = {},
+    picking: Map<String, Post> = emptyMap(),
+) {
     val account by vm.account.collectAsState()
     val columns by vm.columns.collectAsState()
     val items = vm.accountFavs.collectAsLazyPagingItems()
@@ -485,7 +600,7 @@ fun FavoritesScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
                 LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(columns), modifier = Modifier.fillMaxSize()) {
                     items(items.itemCount) { i ->
                         items[i]?.let { post ->
-                            Card(Modifier.padding(4.dp).clickable { onOpen(post) }) {
+                            SelectableCard(post, post.id in picking, onOpen, onLongPress) {
                                 AsyncImage(
                                     model = post.previewUrl.ifEmpty { post.bestUrl },
                                     contentDescription = post.id,
