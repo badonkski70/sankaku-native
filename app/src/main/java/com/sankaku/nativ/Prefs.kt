@@ -35,8 +35,6 @@ object PrefKeys {
     val apiToken = stringPreferencesKey("api_token")
     // SAF tree uri the user picked; empty means the stock Downloads folder
     val downloadTree = stringPreferencesKey("download_tree")
-    val refreshToken = stringPreferencesKey("refresh_token")
-    val apiRefreshToken = stringPreferencesKey("api_refresh_token")
 }
 
 @Serializable
@@ -84,20 +82,6 @@ class PrefsStore(private val ctx: Context) {
     val downloadTree: Flow<String?> = ctx.dataStore.data.map {
         it[PrefKeys.downloadTree]?.takeIf { t -> t.isNotBlank() }
     }
-    val refreshFlow: Flow<String?> = ctx.dataStore.data.map {
-        it[PrefKeys.refreshToken]?.takeIf { t -> t.isNotBlank() }
-    }
-    val apiRefreshFlow: Flow<String?> = ctx.dataStore.data.map {
-        it[PrefKeys.apiRefreshToken]?.takeIf { t -> t.isNotBlank() }
-    }
-
-    suspend fun saveRefresh(token: String, apiToken: String?) {
-        ctx.dataStore.edit {
-            it[PrefKeys.refreshToken] = token
-            if (apiToken != null) it[PrefKeys.apiRefreshToken] = apiToken
-        }
-    }
-
     suspend fun setTheme(v: String) { ctx.dataStore.edit { it[PrefKeys.theme] = v } }
     suspend fun setRatings(v: Set<String>) { ctx.dataStore.edit { it[PrefKeys.ratings] = v } }
     suspend fun setColumns(v: Int) { ctx.dataStore.edit { it[PrefKeys.columns] = v } }
@@ -169,8 +153,6 @@ class PrefsStore(private val ctx: Context) {
             it.remove(PrefKeys.accountName)
             it.remove(PrefKeys.accountEmail)
             it.remove(PrefKeys.apiToken)
-            it.remove(PrefKeys.refreshToken)
-            it.remove(PrefKeys.apiRefreshToken)
         }
     }
 }

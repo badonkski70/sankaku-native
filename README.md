@@ -46,8 +46,14 @@ A few things about the API that aren't obvious, and cost a while to work out:
   silently ignored.
 - Blacklisted tags are refused for non-premium accounts, so the blacklist and
   the image-only filter are applied on-device instead.
-- `/auth/token` doubles as the refresh endpoint, and the refresh token has to
-  be stored or the session dies after seven days.
+- **Tokens cannot be renewed.** Both access tokens last exactly 7 days
+  (`exp - iat = 604800`). The `refresh_token` in the login response is a lie
+  for our purposes: `sankakuapi.com/auth/token` answers `401` to *any* refresh
+  token, and `login.sankakucomplex.com/auth/token` answers `403 jwt issuer
+  invalid` for the api one. Refreshing the login token does return a new pair,
+  but it appears to revoke the api token — so after 7 days the only way in is
+  the password again. The app says so and links to Settings rather than
+  pretending otherwise.
 
 ## Status
 

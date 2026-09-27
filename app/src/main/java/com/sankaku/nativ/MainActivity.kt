@@ -162,18 +162,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val authBump = MutableStateFlow(0)
 
     init {
-        // rotated tokens must be written back, or a refresh is lost on restart
-        Api.onToken = { rt -> viewModelScope.launch { prefs.saveRefresh(rt, null) } }
-        Api.onApiToken = { rt -> viewModelScope.launch { prefs.saveRefresh(prefs.refreshFlow.first() ?: "", rt) } }
         viewModelScope.launch {
             AuthState.header = prefs.authHeader.first()
             AuthState.apiHeader = prefs.apiTokenFlow.first()?.let { "Bearer $it" }
-            AuthState.refreshToken = prefs.refreshFlow.first()
-            AuthState.apiRefreshToken = prefs.apiRefreshFlow.first()
             android.util.Log.i(
                 "SankakuAuth",
-                "startup: session=${AuthState.header != null} api=${AuthState.apiHeader != null} " +
-                    "refresh=${AuthState.refreshToken != null} apiRefresh=${AuthState.apiRefreshToken != null}",
+                "startup: session=${AuthState.header != null} api=${AuthState.apiHeader != null}",
             )
             authBump.value += 1
         }
@@ -190,11 +184,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .onSuccess { res ->
                 prefs.saveApiToken(res.accessToken)
                 AuthState.apiHeader = "${res.tokenType.ifBlank { "Bearer" }} ${res.accessToken}"
-                AuthState.apiRefreshToken = res.refreshToken.ifBlank { null }
-                if (res.refreshToken.isNotBlank()) {
-                    prefs.saveRefresh(prefs.refreshFlow.first() ?: "", res.refreshToken)
-                }
-                android.util.Log.i("SankakuAuth", "api login: refresh_token present=${res.refreshToken.isNotBlank()}")
                 authBump.value += 1
             }
             .onFailure { apiTokenError = it.shortMessage() }
@@ -244,13 +233,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     val res = Api.authService.token(LoginBody(login.trim(), password))
                     prefs.saveAccount(res.accessToken, res.tokenType, res.currentUser.name, res.currentUser.email ?: "")
-                    AuthState.refreshToken = res.refreshToken.ifBlank { null }
-                    // must be written here too, not just on rotation: the
-                    // onToken callback only fires from Api.refresh()
-                    if (res.refreshToken.isNotBlank()) {
-                        prefs.saveRefresh(res.refreshToken, prefs.apiRefreshFlow.first())
-                    }
-                    android.util.Log.i("SankakuAuth", "login: refresh_token present=${res.refreshToken.isNotBlank()}")
                 }
                 AuthState.header = prefs.authHeader.first()
                 authBump.value += 1
@@ -274,8 +256,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         prefs.clearAccount()
         AuthState.header = null
         AuthState.apiHeader = null
-        AuthState.refreshToken = null
-        AuthState.apiRefreshToken = null
         AuthState.expired.value = false
         authBump.value += 1
     }
@@ -503,9 +483,12 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             if (AuthState.expired.collectAsState().value) {
-                Surface(color = MaterialTheme.colorScheme.errorContainer) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.clickable { tab = 3 },
+                ) {
                     Text(
-                        "Session expired — sign in again to restore favourites and full results",
+                        "Session expired — tap to sign in again for favourites and full results",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(12.dp),
                     )
