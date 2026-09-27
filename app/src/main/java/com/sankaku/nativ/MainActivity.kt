@@ -150,9 +150,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val authBump = MutableStateFlow(0)
 
     init {
+        // rotated tokens must be written back, or a refresh is lost on restart
+        Api.onToken = { rt -> viewModelScope.launch { prefs.saveRefresh(rt, null) } }
+        Api.onApiToken = { rt -> viewModelScope.launch { prefs.saveRefresh(prefs.refreshFlow.first() ?: "", rt) } }
         viewModelScope.launch {
             AuthState.header = prefs.authHeader.first()
             AuthState.apiHeader = prefs.apiTokenFlow.first()?.let { "Bearer $it" }
+            AuthState.refreshToken = prefs.refreshFlow.first()
+            AuthState.apiRefreshToken = prefs.apiRefreshFlow.first()
+            android.util.Log.i(
+                "SankakuAuth",
+                "startup: session=${AuthState.header != null} api=${AuthState.apiHeader != null} " +
+                    "refresh=${AuthState.refreshToken != null} apiRefresh=${AuthState.apiRefreshToken != null}",
+            )
             authBump.value += 1
         }
     }
@@ -164,10 +174,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun grantApiToken(login: String, password: String) = viewModelScope.launch {
         if (login.isBlank() || password.isBlank()) return@launch
         apiTokenError = null
-        runCatching { Api.apiAuth.apiToken(LoginBody(login.trim(), password)).accessToken }
-            .onSuccess {
-                prefs.saveApiToken(it)
-                AuthState.apiHeader = "Bearer $it"
+        runCatching { Api.apiAuth.apiToken(LoginBody(login.trim(), password)) }
+            .onSuccess { res ->
+                prefs.saveApiToken(res.accessToken)
+                AuthState.apiHeader = "${res.tokenType.ifBlank { "Bearer" }} ${res.accessToken}"
+                AuthState.apiRefreshToken = res.refreshToken.ifBlank { null }
+                android.util.Log.i("SankakuAuth", "api login: refresh_token present=${res.refreshToken.isNotBlank()}")
                 authBump.value += 1
             }
             .onFailure { apiTokenError = it.message ?: "sign-in failed" }
@@ -208,6 +220,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     val res = Api.authService.token(LoginBody(login.trim(), password))
                     prefs.saveAccount(res.accessToken, res.tokenType, res.currentUser.name, res.currentUser.email ?: "")
+                    AuthState.refreshToken = res.refreshToken.ifBlank { null }
+                    android.util.Log.i("SankakuAuth", "login: refresh_token present=${res.refreshToken.isNotBlank()}")
                 }
                 AuthState.header = prefs.authHeader.first()
                 authBump.value += 1
@@ -231,6 +245,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         prefs.clearAccount()
         AuthState.header = null
         AuthState.apiHeader = null
+        AuthState.refreshToken = null
+        AuthState.apiRefreshToken = null
         AuthState.expired.value = false
         authBump.value += 1
     }

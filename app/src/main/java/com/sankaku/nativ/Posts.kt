@@ -6,6 +6,7 @@ import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -77,12 +78,17 @@ interface SankakuApi {
 data class LoginBody(val login: String, val password: String)
 
 @Serializable
+data class RefreshBody(@SerialName("refresh_token") val refreshToken: String)
+
+@Serializable
 data class MeUser(val name: String = "", val email: String? = null)
 
 @Serializable
 data class LoginResponse(
     @SerialName("access_token") val accessToken: String,
     @SerialName("token_type") val tokenType: String = "Bearer",
+    // the site reads this off the same response; we were dropping it silently
+    @SerialName("refresh_token") val refreshToken: String = "",
     @SerialName("current_user") val currentUser: MeUser,
 )
 
@@ -92,6 +98,10 @@ data class MeResponse(val user: MeUser)
 interface AuthApi {
     @POST("auth/token")
     suspend fun token(@Body body: LoginBody): LoginResponse
+
+    /** Same endpoint, different body — this is how the site renews a session. */
+    @POST("auth/token")
+    suspend fun refresh(@Body body: RefreshBody): LoginResponse
 
     // ponytail: was capi-v2.sankakucomplex.com, which nginx 403s every path
     // (verified 2026-09-27, incl. /users/me). login host serves the same payload.
@@ -103,6 +113,9 @@ interface AuthApi {
 interface ApiAuthApi {
     @POST("auth/token")
     suspend fun apiToken(@Body body: LoginBody): LoginResponse
+
+    @POST("auth/token")
+    suspend fun refresh(@Body body: RefreshBody): LoginResponse
 }
 
 /** In-memory auth header; persisted in DataStore, loaded at startup. */
@@ -111,6 +124,10 @@ object AuthState {
 
     /** Separate token for sankakuapi.com — the one above is rejected there. */
     @Volatile var apiHeader: String? = null
+
+    /** Lets a dead 7-day access token be replaced without asking for a password. */
+    @Volatile var refreshToken: String? = null
+    @Volatile var apiRefreshToken: String? = null
 
     /** Set when the server rejects our token; tokens are only good ~7 days and
      *  without this the app silently drops to anonymous (page 1 only, no favourites). */
@@ -130,15 +147,26 @@ object Api {
                 else AuthState.header
             if (token != null && chain.request().header("Authorization") == null)
                 req.header("Authorization", token)
-            val res = chain.proceed(req.build())
+            var res = chain.proceed(req.build())
+            // /auth/token doubles as the refresh endpoint on both hosts. Retry once
+            // on 401 so a 7-day-old access token heals itself instead of logging
+            // the user out. Skipped for auth/* so a dead refresh token can't recurse.
+            if (res.code == 401 && !chain.request().url.encodedPath.contains("auth/")) {
+                val fresh = runCatching { refresh(chain.request().url.host.endsWith("sankakuapi.com")) }
+                    .getOrNull()
+                if (fresh != null) {
+                    res = chain.proceed(
+                        chain.request().newBuilder().header("Authorization", fresh).build()
+                    )
+                }
+            }
             if (token != null && res.code == 401) AuthState.expired.value = true
             res
         }
         .addInterceptor(HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BASIC))
         .build()
 
-    /** No token injection at all — signing in must not present an existing token. */
-    private val plainClient = OkHttpClient.Builder()
+    /** No token injection at all — signing in must not present an existing token. */    private val plainClient = OkHttpClient.Builder()
         .addInterceptor { chain ->
             chain.proceed(chain.request().newBuilder()
                 .header("User-Agent", "SankakuNative/0.1")
@@ -166,6 +194,41 @@ object Api {
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()
         .create(AuthApi::class.java)
+
+    /**
+     * Trades a refresh token for a fresh access token on whichever host asked.
+     * Returns the new Authorization header, or null if it can't be refreshed.
+     *
+     * ponytail: runBlocking inside an interceptor, which OkHttp generally advises
+     * against. It is the only way to refresh before the response is consumed, and
+     * one blocked dispatcher thread out of many is tolerable here.
+     */
+    private fun refresh(apiHost: Boolean): String? = runBlocking {
+        val rt = if (apiHost) AuthState.apiRefreshToken else AuthState.refreshToken
+        if (rt.isNullOrBlank()) return@runBlocking null
+        val body = RefreshBody(rt)
+        val res = if (apiHost) apiAuth.refresh(body) else authService.refresh(body)
+        val token = res.accessToken
+        if (token.isBlank()) {
+            android.util.Log.w("SankakuAuth", "refresh returned no token for apiHost=$apiHost")
+            return@runBlocking null
+        }
+        val header = "${res.tokenType.ifBlank { "Bearer" }} $token"
+        if (apiHost) {
+            AuthState.apiHeader = header
+            AuthState.apiRefreshToken = res.refreshToken.ifBlank { rt }
+            onApiToken?.invoke(res.refreshToken.ifBlank { rt })
+        } else {
+            AuthState.header = header
+            AuthState.refreshToken = res.refreshToken.ifBlank { rt }
+            onToken?.invoke(res.refreshToken.ifBlank { rt })
+        }
+        header
+    }
+
+    /** Wired up by the ViewModel so a rotated token is persisted. */
+    var onToken: ((String) -> Unit)? = null
+    var onApiToken: ((String) -> Unit)? = null
 }
 
 /** Rating filter is a tag in this API (tags=rating:safe), not a query param —
