@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- White sakura blossom. 108x108 adaptive-icon canvas, drawn inside the
+     centre 66dp safe circle (max radius here is ~30). One petal path, reused
+     five times via rotation. Petals are narrow enough (~57deg fan vs 72deg
+     spacing) to leave the V notches open, which is what makes it read as
+     cherry blossom rather than a generic flower. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group android:pivotX="54" android:pivotY="54" android:rotation="0">
+        <path android:fillColor="#FFFFFF" android:pathData="M54,55 C50,52 45,46 44,36.7 C43,30 44.5,25.5 46,25.5 C48,27 51.5,33 54,39 C56.5,33 60,27 62,25.5 C63.5,25.5 65,30 64,36.7 C63,46 58,52 54,55 Z"/>
+    </group>
+    <group android:pivotX="54" android:pivotY="54" android:rotation="72">
+        <path android:fillColor="#FFFFFF" android:pathData="M54,55 C50,52 45,46 44,36.7 C43,30 44.5,25.5 46,25.5 C48,27 51.5,33 54,39 C56.5,33 60,27 62,25.5 C63.5,25.5 65,30 64,36.7 C63,46 58,52 54,55 Z"/>
+    </group>
+    <group android:pivotX="54" android:pivotY="54" android:rotation="144">
+        <path android:fillColor="#FFFFFF" android:pathData="M54,55 C50,52 45,46 44,36.7 C43,30 44.5,25.5 46,25.5 C48,27 51.5,33 54,39 C56.5,33 60,27 62,25.5 C63.5,25.5 65,30 64,36.7 C63,46 58,52 54,55 Z"/>
+    </group>
+    <group android:pivotX="54" android:pivotY="54" android:rotation="216">
+        <path android:fillColor="#FFFFFF" android:pathData="M54,55 C50,52 45,46 44,36.7 C43,30 44.5,25.5 46,25.5 C48,27 51.5,33 54,39 C56.5,33 60,27 62,25.5 C63.5,25.5 65,30 64,36.7 C63,46 58,52 54,55 Z"/>
+    </group>
+    <group android:pivotX="54" android:pivotY="54" android:rotation="288">
+        <path android:fillColor="#FFFFFF" android:pathData="M54,55 C50,52 45,46 44,36.7 C43,30 44.5,25.5 46,25.5 C48,27 51.5,33 54,39 C56.5,33 60,27 62,25.5 C63.5,25.5 65,30 64,36.7 C63,46 58,52 54,55 Z"/>
+    </group>
+
+    <!-- flower centre: stamen cluster + open pistil -->
+    <path android:fillColor="#FFFFFF" android:pathData="M50.5,54 a3.5,3.5 0 1,0 7,0 a3.5,3.5 0 1,0 -7,0 Z"/>
+</vector>

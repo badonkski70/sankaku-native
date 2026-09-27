@@ -77,7 +77,9 @@ interface AuthApi {
     @POST("auth/token")
     suspend fun token(@Body body: LoginBody): LoginResponse
 
-    @GET("https://capi-v2.sankakucomplex.com/users/me")
+    // ponytail: was capi-v2.sankakucomplex.com, which nginx 403s every path
+    // (verified 2026-09-27, incl. /users/me). login host serves the same payload.
+    @GET("users/me")
     suspend fun me(@Header("Authorization") auth: String): MeResponse
 }
 
@@ -93,7 +95,10 @@ object Api {
             val req = chain.request().newBuilder()
                 .header("User-Agent", "SankakuNative/0.1")
                 .header("Accept", "application/json")
-            AuthState.header?.let { req.header("Authorization", it) }
+            // only fill in the session token if the call didn't bring its own,
+            // so me() validates the token it was handed rather than a stale one
+            if (chain.request().header("Authorization") == null)
+                AuthState.header?.let { req.header("Authorization", it) }
             chain.proceed(req.build())
         }
         .addInterceptor(HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BASIC))
