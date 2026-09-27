@@ -76,6 +76,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -291,21 +292,27 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
         bottomBar = {
             NavigationBar {
                 listOf(
-                    "Browse" to R.drawable.anim_nav_browse,
-                    "Favorites" to R.drawable.anim_nav_favorites,
-                    "Downloads" to R.drawable.anim_nav_downloads,
-                    "Settings" to R.drawable.anim_nav_settings,
-                ).forEachIndexed { i, (label, res) ->
+                    Triple("Browse", R.drawable.anim_nav_browse, R.drawable.nav_browse_off),
+                    Triple("Favorites", R.drawable.anim_nav_favorites, R.drawable.nav_favorites_off),
+                    Triple("Downloads", R.drawable.anim_nav_downloads, R.drawable.nav_downloads_off),
+                    Triple("Settings", R.drawable.anim_nav_settings, R.drawable.nav_settings_off),
+                ).forEachIndexed { i, (label, animRes, offRes) ->
                     val selected = tab == i
-                    val anim = AnimatedImageVector.animatedVectorResource(res)
+                    val anim = AnimatedImageVector.animatedVectorResource(animRes)
                     NavigationBarItem(
                         selected = selected,
                         onClick = { tab = i },
                         icon = {
-                            Icon(
-                                painter = rememberAnimatedVectorPainter(anim, selected),
-                                contentDescription = label,
-                            )
+                            // ponytail: the AVD draws nothing until it has played, so the
+                            // resting state is a plain vector and only selection animates
+                            if (selected) {
+                                Icon(
+                                    painter = rememberAnimatedVectorPainter(anim, true),
+                                    contentDescription = label,
+                                )
+                            } else {
+                                Icon(painter = painterResource(offRes), contentDescription = label)
+                            }
                         },
                         label = { Text(label) },
                     )

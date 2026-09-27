@@ -13,7 +13,9 @@
             <group
                 android:name="root"
                 android:pivotX="12"
-                android:pivotY="12">
+                android:pivotY="12"
+                android:scaleX="1"
+                android:scaleY="1">
                 <path
                     android:name="icon"
                     android:fillColor="#FF000000"
