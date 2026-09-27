@@ -107,11 +107,13 @@ import java.io.IOException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -243,6 +245,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             authBump.value += 1
         }
     }
+
+    /**
+     * Downloads that share a stem are numbered in download order, so
+     * "goon - el goonio.png" and "goon - el goonio.mp4" become
+     * "goon - el goonio - 1.png" / " - 2.mp4". Returns the display name per
+     * entry id plus how many entries were involved in a collision.
+     */
+    private fun disambiguate(entries: List<DlEntry>): Pair<Map<String, String>, Int> {
+        val names = HashMap<String, String>(entries.size)
+        var collided = 0
+        entries.groupBy { it.filename.substringBeforeLast('.', it.filename) }
+            .forEach { (stem, group) ->
+                if (group.size == 1) {
+                    names[group[0].id] = group[0].filename
+                } else {
+                    collided += group.size
+                    group.sortedBy { it.at }.forEachIndexed { i, e ->
+                        val ext = e.filename.substringAfterLast('.', "")
+                        names[e.id] = "$stem - ${i + 1}" + if (ext.isEmpty()) "" else ".$ext"
+                    }
+                }
+            }
+        return names to collided
+    }
+
+    val downloadNames: StateFlow<Pair<Map<String, String>, Int>> =
+        history.map { disambiguate(it) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap<String, String>() to 0)
 
     fun toggleFav(post: Post) = viewModelScope.launch {
         val wasFav = favList.value.any { it.id == post.id }
@@ -635,11 +665,24 @@ fun FavoritesScreen(
 @Composable
 fun DownloadsScreen(vm: MainViewModel) {
     val history by vm.history.collectAsState()
+    val display by vm.downloadNames.collectAsState()
+    val names = display.first
+    val collided = display.second
     val ctx = LocalContext.current
     Column(Modifier.fillMaxSize()) {
         if (history.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No downloads yet") }
         } else {
+            if (collided > 0) {
+                Surface(color = MaterialTheme.colorScheme.errorContainer) {
+                    Text(
+                        if (collided == 1) "1 download shares a name and has been numbered"
+                        else "$collided downloads share a name and have been numbered",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -662,7 +705,10 @@ fun DownloadsScreen(vm: MainViewModel) {
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
-                                Text(e.filename, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    names[e.id] ?: e.filename,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
                                 Text(
                                     "%.1f MB • %s".format(
                                         e.bytes / 1048576.0,
