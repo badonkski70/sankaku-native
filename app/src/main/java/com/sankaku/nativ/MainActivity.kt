@@ -42,6 +42,7 @@ import androidx.compose.animation.graphics.res.rememberAnimatedVectorPainter
 import androidx.compose.animation.graphics.vector.AnimatedImageVector
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -356,6 +357,22 @@ private fun Throwable.messageOrDetail(): String = when (this) {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
+/** Loading feedback: a top bar while refreshing a grid that has content, a centred
+ *  spinner on the very first load when there is nothing to show yet. */
+@Composable
+private fun PagingLoading(items: LazyPagingItems<Post>, modifier: Modifier = Modifier) {
+    val firstLoad = items.loadState.refresh is LoadState.Loading && items.itemCount == 0
+    val refresh = items.loadState.refresh is LoadState.Loading && items.itemCount > 0
+    Box(modifier) {
+        if (firstLoad) {
+            CircularProgressIndicator(Modifier.align(Alignment.Center))
+        } else if (refresh) {
+            LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowseScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
     var text by remember { mutableStateOf("") }
@@ -414,6 +431,7 @@ fun BrowseScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
                 }
             }
             PagingError(items)
+            PagingLoading(items)
         }
     }
 }
@@ -461,12 +479,14 @@ fun FavoritesScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
     val items = vm.accountFavs.collectAsLazyPagingItems()
 
     if (account != null) {
+        val settled = items.loadState.refresh !is LoadState.Loading &&
+            items.loadState.refresh !is LoadState.Error
         Box(Modifier.fillMaxSize()) {
-            if (items.itemCount == 0 && items.loadState.refresh !is LoadState.Error) {
+            if (items.itemCount == 0 && settled) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("No favourites on ${account!!.name} yet")
                 }
-            } else {
+            } else if (items.itemCount > 0) {
                 LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(columns), modifier = Modifier.fillMaxSize()) {
                     items(items.itemCount) { i ->
                         items[i]?.let { post ->
@@ -483,6 +503,7 @@ fun FavoritesScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
                 }
             }
             PagingError(items)
+            PagingLoading(items)
         }
         return
     }
