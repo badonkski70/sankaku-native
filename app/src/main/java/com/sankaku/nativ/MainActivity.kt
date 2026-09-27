@@ -341,7 +341,8 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
                                 }.onSuccess { ok++ }
                             }
                             snackbar.showSnackbar(
-                                if (ok == list.size) "Downloaded $list.size" else "Downloaded $ok of ${list.size}"
+                                if (ok == list.size) "Downloaded ${list.size}"
+                                else "Downloaded $ok of ${list.size}"
                             )
                         }
                     },
