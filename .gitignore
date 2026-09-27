@@ -9,3 +9,7 @@
 local.properties
 *.apk
 *.aab
+
+# throwaway API probe dumps
+/favtest.json
+/one.json
