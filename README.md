@@ -57,5 +57,6 @@ A few things about the API that aren't obvious, and cost a while to work out:
 
 ## Status
 
-Work in progress, no tests yet. See [TODO.md](TODO.md) for what's untested
-and what's still outstanding.
+Work in progress, no tests yet. See [TODO.md](TODO.md) for what's untested and
+outstanding, and [PROGRESS.md](PROGRESS.md) for what has been verified on a
+device and the traps involved.
