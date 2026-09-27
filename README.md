@@ -16,9 +16,12 @@ Sankaku's public API and your own account.
 ## Build
 
 Requires JDK 17 and the Android SDK. The Gradle wrapper is checked in, so a
-clean clone builds with `./gradlew assembleDebug`.
+clean clone builds with `./gradlew assembleDebug` — verified from a fresh
+`git clone` with no `local.properties` present, as long as `ANDROID_HOME`
+points at the SDK. Without either, the build stops with an error naming both
+options.
 
-Point the build at your SDK, either with `ANDROID_HOME` or by creating
+The Android SDK location is set with `ANDROID_HOME`, or per-checkout with
 `local.properties` in the project root:
 
 ```properties
@@ -58,9 +61,4 @@ JavaScript and verified against the live API:
 
 ## Known gaps
 
-- There are no automated tests. The naming, duplicate-split and filter logic
-  are pure functions and are the obvious place to start.
-- Downloads run sequentially, so a large batch is slow.
-- Deselecting a tab does not animate; the AnimatedVectorDrawable interop draws
-  nothing until the animation has played, so the resting state uses a static
-  vector.
+See [TODO.md](TODO.md) for the untested paths and outstanding code work.
