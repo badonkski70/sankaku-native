@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -402,9 +403,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             authBump.value += 1
         }
     }
-    fun removeDl(e: DlEntry) = viewModelScope.launch {
-        runCatching { getApplication<Application>().contentResolver.delete(Uri.parse(e.uri), null, null) }
-        prefs.removeHistory(e.id)
+    fun removeDl(e: DlEntry) = removeDl(listOf(e))
+
+    fun removeDl(entries: List<DlEntry>) = viewModelScope.launch {
+        val cr = getApplication<Application>().contentResolver
+        entries.forEach { runCatching { cr.delete(Uri.parse(it.uri), null, null) } }
+        entries.forEach { prefs.removeHistory(it.id) }
     }
     fun clearDl(es: List<DlEntry>) = viewModelScope.launch {
         val cr = getApplication<Application>().contentResolver
@@ -475,7 +479,15 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
             if (picking.isNotEmpty()) {
                 SelectionBar(
                     count = chosen.size,
-                    onDownload = {
+                    onClear = { picking.clear() },
+                ) {
+                    TextButton(onClick = {
+                        val list = chosen
+                        picking.clear()
+                        vm.setFavs(list, true)
+                        scope.launch { snackbar.showSnackbar("Added ${list.size} to favourites") }
+                    }) { Text("♥ Favourite") }
+                    TextButton(onClick = {
                         val list = chosen
                         picking.clear()
                         ensureNotif()
@@ -488,15 +500,8 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
                                 }
                             }
                         }
-                    },
-                    onFavorite = {
-                        val list = chosen
-                        picking.clear()
-                        vm.setFavs(list, true)
-                        scope.launch { snackbar.showSnackbar("Added ${list.size} to favourites") }
-                    },
-                    onClear = { picking.clear() },
-                )
+                    }) { Text("⬇ Download") }
+                }
             } else {
                 NavigationBar {
                 listOf(
@@ -579,9 +584,14 @@ private fun DupDialog(vm: MainViewModel) {
     )
 }
 
-/** Replaces the nav bar while posts are picked. */
+/** Replaces the nav bar while items are picked. Actions are supplied by the caller
+ *  so the grid (favourite/download) and downloads (delete) share one bar. */
 @Composable
-private fun SelectionBar(count: Int, onDownload: () -> Unit, onFavorite: () -> Unit, onClear: () -> Unit) {
+private fun SelectionBar(
+    count: Int,
+    onClear: () -> Unit,
+    actions: @Composable RowScope.() -> Unit,
+) {
     Surface(tonalElevation = 3.dp) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
@@ -590,8 +600,7 @@ private fun SelectionBar(count: Int, onDownload: () -> Unit, onFavorite: () -> U
         ) {
             TextButton(onClick = onClear) { Text("✕") }
             Text("$count selected", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-            TextButton(onClick = onFavorite) { Text("♥ Favourite") }
-            TextButton(onClick = onDownload) { Text("⬇ Download") }
+            actions()
         }
     }
 }
@@ -813,6 +822,7 @@ fun FavoritesScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DownloadsScreen(vm: MainViewModel) {
     val history by vm.history.collectAsState()
@@ -820,10 +830,20 @@ fun DownloadsScreen(vm: MainViewModel) {
     val names = display.first
     val collided = display.second
     val ctx = LocalContext.current
+    val picking = remember { mutableStateMapOf<String, DlEntry>() }
     Column(Modifier.fillMaxSize()) {
         if (history.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No downloads yet") }
         } else {
+            if (picking.isNotEmpty()) {
+                SelectionBar(count = picking.size, onClear = { picking.clear() }) {
+                    TextButton(onClick = {
+                        val gone = picking.values.toList()
+                        picking.clear()
+                        vm.removeDl(gone)
+                    }) { Text("🗑 Delete") }
+                }
+            }
             if (collided > 0) {
                 Surface(color = MaterialTheme.colorScheme.errorContainer) {
                     Text(
@@ -839,17 +859,34 @@ fun DownloadsScreen(vm: MainViewModel) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("${history.size} files", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${history.size} files • %.1f MB".format(history.sumOf { it.bytes } / 1048576.0),
+                    style = MaterialTheme.typography.titleMedium,
+                )
                 TextButton(onClick = { vm.clearDl(history) }) { Text("Clear all") }
             }
             LazyColumn(Modifier.fillMaxSize()) {
                 items(history, key = { it.id }) { e ->
-                    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clickable {
+                    val open = {
                         ctx.startActivity(
                             Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(e.uri), e.mime)
                                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
                         )
-                    }) {
+                    }
+                    Card(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                            .then(
+                                if (picking.containsKey(e.id))
+                                    Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
+                                else Modifier
+                            )
+                            .combinedClickable(
+                                onClick = { if (picking.isNotEmpty()) { picking.remove(e.id); Unit } else open() },
+                                onLongClick = { picking[e.id] = e },
+                            )
+                    ) {
                         Row(
                             Modifier.fillMaxWidth().padding(12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
