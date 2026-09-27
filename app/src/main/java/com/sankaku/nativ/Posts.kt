@@ -10,12 +10,15 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
+import retrofit2.http.Path
 import retrofit2.http.Query
 
 @Serializable
@@ -55,6 +58,17 @@ interface SankakuApi {
         @Query("tags") tags: String = "",
         @Query("lang") lang: String = "en",
     ): List<Post>
+
+    /**
+     * Favourites are not an endpoint — the site lists them as a tag search
+     * (`fav:<username>`) on /posts. Writes are posts/{id}/favorite, per the
+     * site's own api.js: `post(`posts/${e}/favorite`)`.
+     */
+    @POST("posts/{id}/favorite")
+    suspend fun favorite(@Path("id") id: String): ResponseBody
+
+    @DELETE("posts/{id}/favorite")
+    suspend fun unfavorite(@Path("id") id: String): ResponseBody
 }
 
 @Serializable
@@ -83,9 +97,18 @@ interface AuthApi {
     suspend fun me(@Header("Authorization") auth: String): MeResponse
 }
 
+/** Sign-in for sankakuapi.com. Must not use the token-injecting client. */
+interface ApiAuthApi {
+    @POST("auth/token")
+    suspend fun apiToken(@Body body: LoginBody): LoginResponse
+}
+
 /** In-memory auth header; persisted in DataStore, loaded at startup. */
 object AuthState {
     @Volatile var header: String? = null
+
+    /** Separate token for sankakuapi.com — the one above is rejected there. */
+    @Volatile var apiHeader: String? = null
 }
 
 object Api {
@@ -95,14 +118,35 @@ object Api {
             val req = chain.request().newBuilder()
                 .header("User-Agent", "SankakuNative/0.1")
                 .header("Accept", "application/json")
-            // only fill in the session token if the call didn't bring its own,
-            // so me() validates the token it was handed rather than a stale one
-            if (chain.request().header("Authorization") == null)
-                AuthState.header?.let { req.header("Authorization", it) }
+            // the two hosts want different tokens; and never clobber one the call set itself
+            if (chain.request().header("Authorization") == null) {
+                val token =
+                    if (chain.request().url.host.endsWith("sankakuapi.com")) AuthState.apiHeader
+                    else AuthState.header
+                token?.let { req.header("Authorization", it) }
+            }
             chain.proceed(req.build())
         }
         .addInterceptor(HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BASIC))
         .build()
+
+    /** No token injection at all — signing in must not present an existing token. */
+    private val plainClient = OkHttpClient.Builder()
+        .addInterceptor { chain ->
+            chain.proceed(chain.request().newBuilder()
+                .header("User-Agent", "SankakuNative/0.1")
+                .header("Accept", "application/json")
+                .build())
+        }
+        .build()
+
+    val apiAuth: ApiAuthApi = Retrofit.Builder()
+        .baseUrl("https://sankakuapi.com/")
+        .client(plainClient)
+        .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+        .build()
+        .create(ApiAuthApi::class.java)
+
     val service: SankakuApi = Retrofit.Builder()
         .baseUrl("https://sankakuapi.com/")
         .client(client)

@@ -92,6 +92,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -112,13 +113,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val authBump = MutableStateFlow(0)
 
     init {
-        viewModelScope.launch { AuthState.header = prefs.authHeader.first() }
+        viewModelScope.launch {
+            AuthState.header = prefs.authHeader.first()
+            AuthState.apiHeader = prefs.apiTokenFlow.first()?.let { "Bearer $it" }
+            authBump.value += 1
+        }
     }
+
+    /**
+     * sankakuapi.com rejects the login-host token, so the account needs signing in
+     * there too. Best-effort: the app still browses anonymously without it.
+     */
+    fun grantApiToken(login: String, password: String) = viewModelScope.launch {
+        if (login.isBlank() || password.isBlank()) return@launch
+        apiTokenError = null
+        runCatching { Api.apiAuth.apiToken(LoginBody(login.trim(), password)).accessToken }
+            .onSuccess {
+                prefs.saveApiToken(it)
+                AuthState.apiHeader = "Bearer $it"
+                authBump.value += 1
+            }
+            .onFailure { apiTokenError = it.message ?: "sign-in failed" }
+    }
+
+    var apiTokenError by mutableStateOf<String?>(null)
+        private set
+
+    /** Signed in, but still missing the token sankakuapi.com needs. */
+    val needsApiToken: Flow<Boolean> =
+        combine(prefs.account, prefs.apiTokenFlow) { a, t -> a != null && t == null }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val posts: Flow<PagingData<Post>> =
         combine(query, ratings, blacklist, authBump) { q, r, b, _ -> Triple(q, r, b) }
             .flatMapLatest { (q, r, b) -> postsPager(q, r, b) }
+            .cachedIn(viewModelScope)
+
+    /**
+     * The account's favourites, as the `fav:<name>` tag search the website uses.
+     * Empty page when signed out, so the tab falls back to local hearts.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val accountFavs: Flow<PagingData<Post>> =
+        combine(account, authBump) { a, _ -> a?.name }
+            .flatMapLatest { name ->
+                if (name == null) flowOf(PagingData.empty()) else postsPager("fav:$name")
+            }
             .cachedIn(viewModelScope)
 
     fun login(login: String, password: String, token: String) {
@@ -134,6 +174,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 AuthState.header = prefs.authHeader.first()
                 authBump.value += 1
+                // same credentials, second host — only possible with a password
+                if (token.isBlank()) grantApiToken(login, password)
             } catch (e: HttpException) {
                 val raw = runCatching { e.response()?.errorBody()?.string() ?: "" }.getOrDefault("")
                 val code = runCatching {
@@ -164,7 +206,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setBlacklistCsv(csv: String) = viewModelScope.launch {
         prefs.setBlacklist(csv.split(",", " ", "\n").map { it.trim().lowercase().replace(" ", "_") }.filter { it.isNotBlank() }.toSet())
     }
-    fun toggleFav(post: Post) = viewModelScope.launch { prefs.toggleFav(post) }
+    /**
+     * Hearting keeps the local cache in step so signed-out use still works, and
+     * best-effort mirrors to the account when signed in — the favourites tab reads
+     * the account, so without the write the heart would look like it did nothing.
+     */
+    fun toggleFav(post: Post) = viewModelScope.launch {
+        val wasFav = favList.value.any { it.id == post.id }
+        prefs.toggleFav(post)
+        if (account.value != null) {
+            runCatching {
+                if (wasFav) Api.service.unfavorite(post.id) else Api.service.favorite(post.id)
+            }
+            authBump.value += 1
+        }
+    }
     fun removeDl(e: DlEntry) = viewModelScope.launch {
         runCatching { getApplication<Application>().contentResolver.delete(Uri.parse(e.uri), null, null) }
         prefs.removeHistory(e.id)
@@ -283,8 +339,35 @@ fun BrowseScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
 
 @Composable
 fun FavoritesScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
-    val favs by vm.favList.collectAsState()
+    val account by vm.account.collectAsState()
     val columns by vm.columns.collectAsState()
+    val items = vm.accountFavs.collectAsLazyPagingItems()
+
+    if (account != null) {
+        if (items.itemCount == 0) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No favourites on ${account!!.name} yet")
+            }
+        } else {
+            LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(columns), modifier = Modifier.fillMaxSize()) {
+                items(items.itemCount) { i ->
+                    items[i]?.let { post ->
+                        Card(Modifier.padding(4.dp).clickable { onOpen(post) }) {
+                            AsyncImage(
+                                model = post.previewUrl.ifEmpty { post.bestUrl },
+                                contentDescription = post.id,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxWidth().aspectRatio(0.75f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    val favs by vm.favList.collectAsState()
     if (favs.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No favorites yet — ♥ a post to save it here") }
     } else {
@@ -376,6 +459,16 @@ fun SettingsScreen(vm: MainViewModel) {
             TextButton(onClick = { vm.login(loginText, passText, tokenText) }) { Text("Log in") }
         } else {
             Text("Logged in as ${account!!.name}" + if (account!!.email.isNotBlank()) " (${account!!.email})" else "")
+            if (vm.needsApiToken.collectAsState(initial = false).value) {
+                Text(
+                    "Sankaku's post server needs its own sign-in, or only the first page of results will load.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedTextField(value = loginText, onValueChange = { loginText = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Email") }, singleLine = true)
+                OutlinedTextField(value = passText, onValueChange = { passText = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
+                vm.apiTokenError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                TextButton(onClick = { vm.grantApiToken(loginText, passText) }) { Text("Enable full browsing") }
+            }
             TextButton(onClick = { vm.logout() }) { Text("Log out") }
         }
         Text("Theme", style = MaterialTheme.typography.titleMedium)

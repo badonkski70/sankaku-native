@@ -25,6 +25,9 @@ object PrefKeys {
     val tokenType = stringPreferencesKey("token_type")
     val accountName = stringPreferencesKey("account_name")
     val accountEmail = stringPreferencesKey("account_email")
+    // sankakuapi.com rejects the login-host token with common_unauthorized, so it
+    // needs its own; without it the app can only ever load page 1.
+    val apiToken = stringPreferencesKey("api_token")
 }
 
 @Serializable
@@ -65,6 +68,9 @@ class PrefsStore(private val ctx: Context) {
     val account: Flow<Account?> = ctx.dataStore.data.map { prefs ->
         val n = prefs[PrefKeys.accountName]
         if (n.isNullOrBlank()) null else Account(n, prefs[PrefKeys.accountEmail] ?: "")
+    }
+    val apiTokenFlow: Flow<String?> = ctx.dataStore.data.map {
+        it[PrefKeys.apiToken]?.takeIf { t -> t.isNotBlank() }
     }
 
     suspend fun setTheme(v: String) { ctx.dataStore.edit { it[PrefKeys.theme] = v } }
@@ -118,12 +124,18 @@ class PrefsStore(private val ctx: Context) {
         }
     }
 
+    /** Mints the sankakuapi.com token from the same credentials. */
+    suspend fun saveApiToken(token: String) {
+        ctx.dataStore.edit { it[PrefKeys.apiToken] = token }
+    }
+
     suspend fun clearAccount() {
         ctx.dataStore.edit {
             it.remove(PrefKeys.authToken)
             it.remove(PrefKeys.tokenType)
             it.remove(PrefKeys.accountName)
             it.remove(PrefKeys.accountEmail)
+            it.remove(PrefKeys.apiToken)
         }
     }
 }
