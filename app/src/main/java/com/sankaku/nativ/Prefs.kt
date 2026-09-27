@@ -19,9 +19,11 @@ object PrefKeys {
     val ratings = stringSetPreferencesKey("ratings") // s, q, e
     val columns = intPreferencesKey("columns")
     val blacklist = stringSetPreferencesKey("blacklist")
-    // ponytail: whole Post JSON cached, so the signed image URLs (?e=&expires=)
-    // go stale and signed-out hearts eventually show broken images. Superseded by
-    // account favourites when signed in; rehydrate by id if that ever matters.
+    // ponytail: whole Post JSON cached, so signed image URLs (?e=&expires=) go
+    // stale. Unfixable by re-fetching: /posts/{id} only accepts the obfuscated id
+    // that authenticated calls return, and these are all anonymous numeric ids.
+    // Superseded by account favourites when signed in; CachedThumb shows the
+    // expired state honestly.
     val favs = stringSetPreferencesKey("favs") // Post JSON, keyed by id
     val history = stringSetPreferencesKey("history") // DlEntry JSON, keyed by post id
     val authToken = stringPreferencesKey("auth_token")

@@ -88,6 +88,7 @@ import androidx.paging.cachedIn
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
 import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
 import java.io.IOException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -388,6 +389,42 @@ fun BrowseScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
     }
 }
 
+/**
+ * Signed-out favourites are the only cached thumbnails on screen, and their signed
+ * URLs (?e=&expires=) do expire. They can't be refreshed: /posts/{id} rejects the
+ * numeric ids that anonymous requests hand out (verified — it only accepts the
+ * obfuscated form), so an expired one gets an honest tile instead of a blank box.
+ */
+@Composable
+private fun CachedThumb(post: Post, onOpen: () -> Unit) {
+    var expired by remember(post.id) { mutableStateOf(false) }
+    Card(Modifier.padding(4.dp).clickable(onClick = onOpen)) {
+        Box {
+            AsyncImage(
+                model = post.previewUrl.ifEmpty { post.bestUrl },
+                contentDescription = post.id,
+                contentScale = ContentScale.Crop,
+                onState = { if (it is AsyncImagePainter.State.Error) expired = true },
+                modifier = Modifier.fillMaxWidth().aspectRatio(0.75f),
+            )
+            if (expired) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.75f),
+                    modifier = Modifier.matchParentSize(),
+                ) {
+                    Box(Modifier.padding(8.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Saved link\nexpired",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun FavoritesScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
     val account by vm.account.collectAsState()
@@ -428,14 +465,7 @@ fun FavoritesScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
         LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(columns), modifier = Modifier.fillMaxSize()) {
             items(favs.size) { i ->
                 val post = favs[i]
-                Card(Modifier.padding(4.dp).clickable { onOpen(post) }) {
-                    AsyncImage(
-                        model = post.previewUrl.ifEmpty { post.bestUrl },
-                        contentDescription = post.id,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(0.75f),
-                    )
-                }
+                CachedThumb(post) { onOpen(post) }
             }
         }
     }
