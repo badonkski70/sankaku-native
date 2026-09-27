@@ -5,6 +5,7 @@ import androidx.paging.PagingConfig
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -109,6 +110,10 @@ object AuthState {
 
     /** Separate token for sankakuapi.com — the one above is rejected there. */
     @Volatile var apiHeader: String? = null
+
+    /** Set when the server rejects our token; tokens are only good ~7 days and
+     *  without this the app silently drops to anonymous (page 1 only, no favourites). */
+    val expired = MutableStateFlow(false)
 }
 
 object Api {
@@ -119,13 +124,14 @@ object Api {
                 .header("User-Agent", "SankakuNative/0.1")
                 .header("Accept", "application/json")
             // the two hosts want different tokens; and never clobber one the call set itself
-            if (chain.request().header("Authorization") == null) {
-                val token =
-                    if (chain.request().url.host.endsWith("sankakuapi.com")) AuthState.apiHeader
-                    else AuthState.header
-                token?.let { req.header("Authorization", it) }
-            }
-            chain.proceed(req.build())
+            val token =
+                if (chain.request().url.host.endsWith("sankakuapi.com")) AuthState.apiHeader
+                else AuthState.header
+            if (token != null && chain.request().header("Authorization") == null)
+                req.header("Authorization", token)
+            val res = chain.proceed(req.build())
+            if (token != null && res.code == 401) AuthState.expired.value = true
+            res
         }
         .addInterceptor(HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BASIC))
         .build()
@@ -161,6 +167,10 @@ object Api {
         .create(AuthApi::class.java)
 }
 
+/** Rating filter is a tag in this API (tags=rating:safe), not a query param —
+ *  verified 2026-09-27, a `rating=s` param is silently ignored. */
+private val RATING_TAG = mapOf("s" to "safe", "q" to "questionable", "e" to "explicit")
+
 class PostsPagingSource(
     private val api: SankakuApi = Api.service,
     private val tags: String,
@@ -170,8 +180,19 @@ class PostsPagingSource(
     override suspend fun load(params: LoadParams<Int>): LoadResult<Int, Post> {
         val page = params.key ?: 1
         return try {
+            // Only one rating:tag is honoured; space-separated tags are AND and
+            // comma/pipe aren't OR, so push it down only for a single selection.
+            // Blacklist stays local: -tag is rejected for non-premium accounts
+            // (snackbar__account_regular_excluded-tags-limit).
+            val serverTags = buildString {
+                if (tags.isNotBlank()) append(tags.trim())
+                if (ratings.size == 1) {
+                    if (isNotEmpty()) append(' ')
+                    append("rating:").append(RATING_TAG[ratings.first()] ?: ratings.first())
+                }
+            }
             // Anon API redacts gated posts (no URLs) — drop them, full access needs login.
-            val posts = api.posts(page = page, limit = 40, tags = tags)
+            val posts = api.posts(page = page, limit = 40, tags = serverTags)
                 .filter { !it.redirectToSignup && (it.previewUrl.isNotBlank() || it.bestUrl.isNotBlank()) }
                 .filter { it.rating.firstOrNull()?.lowercase() in ratings }
                 .filter { it.tagNames.intersect(blacklist).isEmpty() }

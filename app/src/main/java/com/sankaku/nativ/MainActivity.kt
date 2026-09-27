@@ -47,6 +47,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SearchBar
+import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -81,10 +82,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import androidx.paging.LoadState
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
+import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
 import coil3.compose.AsyncImage
+import java.io.IOException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -174,6 +178,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 AuthState.header = prefs.authHeader.first()
                 authBump.value += 1
+                AuthState.expired.value = false
                 // same credentials, second host — only possible with a password
                 if (token.isBlank()) grantApiToken(login, password)
             } catch (e: HttpException) {
@@ -192,6 +197,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun logout() = viewModelScope.launch {
         prefs.clearAccount()
         AuthState.header = null
+        AuthState.apiHeader = null
+        AuthState.expired.value = false
         authBump.value += 1
     }
 
@@ -263,6 +270,17 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
     val searchTag: (String) -> Unit = { vm.search(it); tab = 0 }
 
     Scaffold(
+        topBar = {
+            if (AuthState.expired.collectAsState().value) {
+                Surface(color = MaterialTheme.colorScheme.errorContainer) {
+                    Text(
+                        "Session expired — sign in again to restore favourites and full results",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
+            }
+        },
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = {}, label = { Text("Browse") })
@@ -285,6 +303,29 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
+/** Blank grid with no explanation is the worst failure mode — say what went wrong. */
+@Composable
+private fun PagingError(items: LazyPagingItems<Post>, modifier: Modifier = Modifier) {
+    val state = items.loadState.refresh
+    if (state !is LoadState.Error) return
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Couldn't load posts\n${state.error.messageOrDetail()}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            TextButton(onClick = { items.retry() }) { Text("Retry") }
+        }
+    }
+}
+
+private fun Throwable.messageOrDetail(): String = when (this) {
+    is HttpException -> "HTTP ${code()}"
+    is IOException -> message ?: "no connection"
+    else -> message ?: javaClass.simpleName
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowseScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
     var text by remember { mutableStateOf("") }
@@ -294,45 +335,55 @@ fun BrowseScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
 
     Column(Modifier.fillMaxSize()) {
         SearchBar(
-            query = text,
-            onQueryChange = { text = it },
-            onSearch = { vm.search(text) },
-            active = false,
-            onActiveChange = {},
-            placeholder = { Text("tags, e.g. touhou rating:safe") },
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
+            inputField = {
+                SearchBarDefaults.InputField(
+                    query = text,
+                    onQueryChange = { text = it },
+                    onSearch = { vm.search(text) },
+                    expanded = false,
+                    onExpandedChange = {},
+                    placeholder = { Text("tags, e.g. touhou rating:safe") },
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                )
+            },
+            expanded = false,
+            onExpandedChange = {},
+            modifier = Modifier.fillMaxWidth(),
         ) {}
         Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("s" to "Safe", "q" to "Questionable", "e" to "Explicit").forEach { (r, label) ->
                 FilterChip(selected = r in ratings, onClick = { vm.toggleRating(r) }, label = { Text(label) })
             }
         }
-        LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(columns), modifier = Modifier.fillMaxSize()) {
-            items(items.itemCount) { i ->
-                items[i]?.let { post ->
-                    Card(Modifier.padding(4.dp).clickable { onOpen(post) }) {
-                        Box {
-                            AsyncImage(
-                                model = post.previewUrl.ifEmpty { post.bestUrl },
-                                contentDescription = post.id,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxWidth().aspectRatio(0.75f),
-                            )
-                            Surface(
-                                color = Color.Black.copy(alpha = 0.6f),
-                                modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
-                            ) {
-                                Text(
-                                    (if (post.isVideo) "▶" else "") + post.rating.uppercase(),
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        Box(Modifier.fillMaxSize()) {
+            LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(columns), modifier = Modifier.fillMaxSize()) {
+                items(items.itemCount) { i ->
+                    items[i]?.let { post ->
+                        Card(Modifier.padding(4.dp).clickable { onOpen(post) }) {
+                            Box {
+                                AsyncImage(
+                                    model = post.previewUrl.ifEmpty { post.bestUrl },
+                                    contentDescription = post.id,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxWidth().aspectRatio(0.75f),
                                 )
+                                Surface(
+                                    color = Color.Black.copy(alpha = 0.6f),
+                                    modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
+                                ) {
+                                    Text(
+                                        (if (post.isVideo) "▶" else "") + post.rating.uppercase(),
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
+            PagingError(items)
         }
     }
 }
@@ -344,25 +395,28 @@ fun FavoritesScreen(vm: MainViewModel, onOpen: (Post) -> Unit) {
     val items = vm.accountFavs.collectAsLazyPagingItems()
 
     if (account != null) {
-        if (items.itemCount == 0) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No favourites on ${account!!.name} yet")
-            }
-        } else {
-            LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(columns), modifier = Modifier.fillMaxSize()) {
-                items(items.itemCount) { i ->
-                    items[i]?.let { post ->
-                        Card(Modifier.padding(4.dp).clickable { onOpen(post) }) {
-                            AsyncImage(
-                                model = post.previewUrl.ifEmpty { post.bestUrl },
-                                contentDescription = post.id,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxWidth().aspectRatio(0.75f),
-                            )
+        Box(Modifier.fillMaxSize()) {
+            if (items.itemCount == 0 && items.loadState.refresh !is LoadState.Error) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No favourites on ${account!!.name} yet")
+                }
+            } else {
+                LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(columns), modifier = Modifier.fillMaxSize()) {
+                    items(items.itemCount) { i ->
+                        items[i]?.let { post ->
+                            Card(Modifier.padding(4.dp).clickable { onOpen(post) }) {
+                                AsyncImage(
+                                    model = post.previewUrl.ifEmpty { post.bestUrl },
+                                    contentDescription = post.id,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxWidth().aspectRatio(0.75f),
+                                )
+                            }
                         }
                     }
                 }
             }
+            PagingError(items)
         }
         return
     }

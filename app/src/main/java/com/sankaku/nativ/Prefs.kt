@@ -19,6 +19,9 @@ object PrefKeys {
     val ratings = stringSetPreferencesKey("ratings") // s, q, e
     val columns = intPreferencesKey("columns")
     val blacklist = stringSetPreferencesKey("blacklist")
+    // ponytail: whole Post JSON cached, so the signed image URLs (?e=&expires=)
+    // go stale and signed-out hearts eventually show broken images. Superseded by
+    // account favourites when signed in; rehydrate by id if that ever matters.
     val favs = stringSetPreferencesKey("favs") // Post JSON, keyed by id
     val history = stringSetPreferencesKey("history") // DlEntry JSON, keyed by post id
     val authToken = stringPreferencesKey("auth_token")
@@ -87,11 +90,6 @@ class PrefsStore(private val ctx: Context) {
             prefs[PrefKeys.favs] = cur
         }
     }
-
-    suspend fun isFav(id: String): Boolean =
-        ctx.dataStore.data.first()[PrefKeys.favs]?.any {
-            runCatching { json.decodeFromString<Post>(it).id == id }.getOrDefault(false)
-        } == true
 
     suspend fun addHistory(e: DlEntry) {
         ctx.dataStore.edit { prefs ->
