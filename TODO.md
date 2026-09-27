@@ -4,38 +4,35 @@
 
 None of these have been run.
 
-1. **Set a custom download folder, restart the phone, then download
-   something.** Android can revoke a folder permission across a reboot. If
-   that happens, downloads to that folder fail and it would only surface
-   weeks later. Fix would be re-picking the folder in Settings.
-
-3. **Favourite 10–12 posts in one go.** Batch favouriting works, but has
+1. **Favourite 10–12 posts in one go.** Batch favouriting works, but has
    only been tried with two or three. Each is a separate API call, so this
    is a good way to find out whether Sankaku rate-limits us. If some fail
    silently, that is a bug — nothing currently reports a partial failure.
 
-4. **Log out of Sankaku on the website, then open the app.** Forces a real
+2. **Log out of Sankaku on the website, then open the app.** Forces a real
    401 and is the only practical way to test token refresh without waiting
    seven days. The app should quietly get a new token. If the "Session
    expired" banner appears instead, the refresh is not working — though
    the website may kill the refresh token too, in which case the banner is
    correct and the refresh was pointless.
 
-5. **Try to download something undownloadable** — an old or deleted post.
+3. **Try to download something undownloadable** — an old or deleted post.
    The URL will 404. Expect a clean "Download failed" notification, no hang
    or crash. Also exercises the new message capping.
 
-6. **Start a download, then force-stop the app.** Downloads run in the
+4. **Start a download, then force-stop the app.** Downloads run in the
    ViewModel, which dies with the process, so a partial file may be left.
    A design limit rather than a bug, but worth knowing.
 
-7. **Sign in by pasting a token rather than using a password.** No password
+5. **Sign in by pasting a token rather than using a password.** No password
    means the app cannot obtain its second token by itself. Settings should
    prompt for one to "enable full browsing"; if the prompt is missing or
    confusing, that needs fixing.
 
 ## Fixed
 
+- ~~A custom download folder can lose its permission across a reboot.~~
+  Tested with a real reboot: the grant survives, no re-picking needed.
 - ~~Rotation lost everything in `remember`.~~ Now `rememberSaveable`
   throughout, verified on device: search text, selected tab, multi-select
   (a custom saver, since the maps hold whole `Post`s), the open post, the
