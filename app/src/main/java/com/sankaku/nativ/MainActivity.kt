@@ -44,6 +44,7 @@ import androidx.compose.animation.graphics.ExperimentalAnimationGraphicsApi
 import androidx.compose.animation.graphics.res.animatedVectorResource
 import androidx.compose.animation.graphics.res.rememberAnimatedVectorPainter
 import androidx.compose.animation.graphics.vector.AnimatedImageVector
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -117,6 +118,13 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+
+/** A download blocked pending confirmation: the names and the entries they match. */
+data class DupPrompt(
+    val names: List<String>,
+    val matches: List<DlEntry>,
+    val proceed: () -> Unit,
+)
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = PrefsStore(app)
@@ -275,18 +283,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap<String, String>() to 0)
 
     /**
-     * Warn at download time, not only when the Downloads tab is opened — by
-     * then you've forgotten which two files clashed. Null when nothing clashes.
+     * A download is a near-certain duplicate when the name matches AND the size
+     * does. Name alone is too eager (same artist+character is common); size alone
+     * is no signal at all.
      */
-    fun duplicateWarning(filenames: List<String>): String? {
-        if (filenames.isEmpty()) return null
-        val taken = history.value.map { it.filename.substringBeforeLast('.', it.filename) }.toSet()
-        val clashes = filenames.count { it.substringBeforeLast('.', it) in taken }
-        return when (clashes) {
-            0 -> null
-            filenames.size -> "All ${filenames.size} shared a name and were numbered — see Downloads"
-            else -> "$clashes of ${filenames.size} shared a name and were numbered — see Downloads"
+    private fun similarDownloads(posts: List<Post>): List<Pair<String, DlEntry>> {
+        val existing = history.value
+        return posts.mapNotNull { p ->
+            if (p.fileSize <= 0) return@mapNotNull null
+            val name = downloadName(p)
+            val stem = name.substringBeforeLast('.', name)
+            val hit = existing.firstOrNull { e ->
+                e.filename.substringBeforeLast('.', e.filename) == stem &&
+                    // ponytail: fixed slack rather than a real hash; a re-encode of
+                    // the same file lands within a percent, a different file does not
+                    kotlin.math.abs(e.bytes - p.fileSize) <= maxOf(64L * 1024, p.fileSize / 50)
+            }
+            hit?.let { name to it }
         }
+    }
+
+    private val _dupPrompt = MutableStateFlow<DupPrompt?>(null)
+    val dupPrompt: StateFlow<DupPrompt?> = _dupPrompt
+    fun confirmDup() { _dupPrompt.value?.let { it.proceed() }; _dupPrompt.value = null }
+    fun cancelDup() { _dupPrompt.value = null }
+
+    /** Runs [proceed] immediately unless something similar is already downloaded. */
+    fun requestDownload(posts: List<Post>, proceed: () -> Unit) {
+        val dupes = similarDownloads(posts)
+        if (dupes.isEmpty()) proceed()
+        else _dupPrompt.value = DupPrompt(dupes.map { it.first }, dupes.map { it.second }, proceed)
     }
 
     fun toggleFav(post: Post) = viewModelScope.launch {
@@ -376,20 +402,21 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
                         val list = chosen
                         picking.clear()
                         ensureNotif()
-                        scope.launch {
-                            // ponytail: sequential so a big pick doesn't hammer the
-                            // server; a queue/WorkManager if this ever gets long
-                            var ok = 0
-                            list.forEach { p ->
-                                runCatching {
-                                    ctx.downloadPost(p, p.fileUrl.ifEmpty { p.bestUrl }) { _, _ -> }
-                                }.onSuccess { ok++ }
-                            }
-                            snackbar.showSnackbar(
-                                vm.duplicateWarning(list.map { downloadName(it) })
-                                    ?: if (ok == list.size) "Downloaded ${list.size}"
+                        vm.requestDownload(list) {
+                            scope.launch {
+                                // ponytail: sequential so a big pick doesn't hammer
+                                // the server; a queue if this ever gets long
+                                var ok = 0
+                                list.forEach { p ->
+                                    runCatching {
+                                        ctx.downloadPost(p, p.fileUrl.ifEmpty { p.bestUrl }) { _, _ -> }
+                                    }.onSuccess { ok++ }
+                                }
+                                snackbar.showSnackbar(
+                                    if (ok == list.size) "Downloaded ${list.size}"
                                     else "Downloaded $ok of ${list.size}"
-                            )
+                                )
+                            }
                         }
                     },
                     onFavorite = {
@@ -441,7 +468,45 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
             }
         }
     }
+    DupDialog(vm)
     selected?.let { ViewerDialog(it, vm, ensureNotif, onSearchTag = { searchTag(it); selected = null }) { selected = null } }
+}
+
+/** "You already downloaded this" — shown before anything is written. */
+@Composable
+private fun DupDialog(vm: MainViewModel) {
+    val prompt by vm.dupPrompt.collectAsState()
+    val p = prompt ?: return
+    AlertDialog(
+        onDismissRequest = { vm.cancelDup() },
+        title = { Text(if (p.names.size == 1) "Already downloaded" else "Similar files already downloaded") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                p.names.zip(p.matches).forEach { (name, hit) ->
+                    Column {
+                        Text(name, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "%.1f MB • %s".format(
+                                hit.bytes / 1048576.0,
+                                java.text.DateFormat.getDateTimeInstance(
+                                    java.text.DateFormat.MEDIUM,
+                                    java.text.DateFormat.SHORT,
+                                ).format(java.util.Date(hit.at)),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                Text(
+                    if (p.names.size == 1) "Save it again?"
+                    else "Save ${p.names.size} files anyway?",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { vm.confirmDup() }) { Text("Save again") } },
+        dismissButton = { TextButton(onClick = { vm.cancelDup() }) { Text("Cancel") } },
+    )
 }
 
 /** Replaces the nav bar while posts are picked. */
@@ -826,20 +891,17 @@ fun ViewerDialog(post: Post, vm: MainViewModel, ensureNotif: () -> Unit, onSearc
                 TextButton(onClick = { vm.toggleFav(post) }) { Text(if (isFav) "♥" else "♡", color = Color.White) }
                 TextButton(onClick = {
                     ensureNotif()
-                    msg = null; done = 0; total = -1
-                    scope.launch {
-                        try {
-                            val bytes = ctx.downloadPost(post, mediaUrl) { d, t -> done = d; total = t }
-                            msg = buildString {
-                                append("Saved %.1f MB".format(bytes / 1048576.0))
-                                vm.duplicateWarning(listOf(downloadName(post)))?.let {
-                                    append(" • ").append(it)
-                                }
+                    vm.requestDownload(listOf(post)) {
+                        msg = null; done = 0; total = -1
+                        scope.launch {
+                            try {
+                                val bytes = ctx.downloadPost(post, mediaUrl) { d, t -> done = d; total = t }
+                                msg = "Saved %.1f MB".format(bytes / 1048576.0)
+                            } catch (e: Exception) {
+                                msg = "Failed: ${e.message}"
                             }
-                        } catch (e: Exception) {
-                            msg = "Failed: ${e.message}"
+                            done = -1
                         }
-                        done = -1
                     }
                 }) { Text("Download", color = Color.White) }
                 TextButton(onClick = { ctx.openUrl(mediaUrl) }) { Text("Open", color = Color.White) }

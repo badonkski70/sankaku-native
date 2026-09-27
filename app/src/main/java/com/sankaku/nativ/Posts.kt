@@ -39,6 +39,7 @@ data class Post(
     @SerialName("file_url") val fileUrl: String = "",
     @SerialName("file_type") val fileType: String = "",
     @SerialName("file_ext") val fileExt: String = "",
+    @SerialName("file_size") val fileSize: Long = 0,
     val width: Int = 0,
     val height: Int = 0,
     @SerialName("fav_count") val favCount: Int = 0,
