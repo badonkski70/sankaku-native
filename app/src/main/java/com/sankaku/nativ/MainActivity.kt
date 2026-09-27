@@ -60,8 +60,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SearchBar
-import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -88,6 +86,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -685,43 +688,53 @@ fun BrowseScreen(
     onLongPress: (Post) -> Unit = {},
     picking: Map<String, Post> = emptyMap(),
 ) {
-    var text by remember { mutableStateOf("") }
+    // TextFieldValue rather than a plain String so a chosen tag can put the
+    // cursor at the end. SearchBar's InputField takes a String and has no way to
+    // move the caret, and on 1.3.1 there is no TextFieldState overload either.
+    var query by remember { mutableStateOf(TextFieldValue("")) }
+    val text = query.text
     val ratings by vm.ratings.collectAsState()
     val columns by vm.columns.collectAsState()
     val items = vm.posts.collectAsLazyPagingItems()
     var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
-    // only the last tag in the box is what we're completing
-    val completing = remember(text) { text.trim().split(' ').lastOrNull().orEmpty() }
+    // the partial word being completed: what follows the last space, and only
+    // while there IS a partial word. After a space the previous tag is finished,
+    // so we suggest nothing until they start the next one.
+    val completing = remember(text) {
+        if (text.isEmpty() || text.endsWith(" ")) "" else text.substringAfterLast(' ')
+    }
 
     LaunchedEffect(completing) {
         // debounce: one request per pause in typing, not per keystroke
+        if (completing.isBlank()) { suggestions = emptyList(); return@LaunchedEffect }
         delay(280)
         suggestions = vm.suggestTags(completing)
     }
 
+    // replaces the partial word, keeps any tags before it, and drops the caret
+    // at the end so the next tag can be typed straight away
     fun addTag(tag: String) {
-        val head = text.trimStart().trimEnd().removeSuffix(tag).trim()
-        text = if (head.isEmpty()) "$tag " else "$head $tag "
+        val words = text.split(' ').filter { it.isNotBlank() }.toMutableList()
+        val next = if (words.isEmpty()) "$tag " else {
+            words[words.lastIndex] = tag
+            words.joinToString(" ") + " "
+        }
+        query = TextFieldValue(next, TextRange(next.length))
         suggestions = emptyList()
     }
 
     Column(Modifier.fillMaxSize()) {
-        SearchBar(
-            inputField = {
-                SearchBarDefaults.InputField(
-                    query = text,
-                    onQueryChange = { text = it },
-                    onSearch = { vm.search(text); suggestions = emptyList() },
-                    expanded = false,
-                    onExpandedChange = {},
-                    placeholder = { Text("tags, e.g. touhou rating:safe") },
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
-                )
-            },
-            expanded = false,
-            onExpandedChange = {},
-            modifier = Modifier.fillMaxWidth(),
-        ) {}
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text("tags, e.g. touhou rating:safe") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(
+                onSearch = { vm.search(query.text); suggestions = emptyList() },
+            ),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        )
         Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("s" to "Safe", "q" to "Questionable", "e" to "Explicit").forEach { (r, label) ->
                 FilterChip(selected = r in ratings, onClick = { vm.toggleRating(r) }, label = { Text(label) })
