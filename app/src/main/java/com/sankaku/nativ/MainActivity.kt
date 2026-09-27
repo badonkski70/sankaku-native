@@ -313,6 +313,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * downloaded goes straight to [download]; only the duplicates wait on the
      * dialog, so two clashing files never hold up the other eight.
      */
+    /** The folder downloads should go to, or null for the stock Downloads collection. */
+    suspend fun downloadTreeUri(): Uri? =
+        prefs.downloadTree.first()?.let { runCatching { Uri.parse(it) }.getOrNull() }
+
     fun requestDownload(posts: List<Post>, download: (List<Post>) -> Unit) {
         val dupes = similarDownloads(posts)
         val heldIds = dupes.map { it.first.id }.toSet()
@@ -323,6 +327,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _dupPrompt.value = DupPrompt(held, dupes.map { it.second }) { download(held) }
         }
     }
+
+    val downloadTree: Flow<String?> = prefs.downloadTree
+
+    fun setDownloadTree(uri: String?) = viewModelScope.launch { prefs.setDownloadTree(uri) }
 
     fun toggleFav(post: Post) = viewModelScope.launch {
         val wasFav = favList.value.any { it.id == post.id }
@@ -415,10 +423,11 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
                             scope.launch {
                                 // ponytail: sequential so a big pick doesn't hammer
                                 // the server; a queue if this ever gets long
+                                val tree = vm.downloadTreeUri()
                                 var ok = 0
                                 batch.forEach { p ->
                                     runCatching {
-                                        ctx.downloadPost(p, p.fileUrl.ifEmpty { p.bestUrl }) { _, _ -> }
+                                        ctx.downloadPost(p, p.fileUrl.ifEmpty { p.bestUrl }, { _, _ -> }, tree)
                                     }.onSuccess { ok++ }
                                 }
                                 snackbar.showSnackbar(
@@ -829,6 +838,18 @@ fun SettingsScreen(vm: MainViewModel) {
     var passText by remember { mutableStateOf("") }
     var tokenText by remember { mutableStateOf("") }
     val ctx = LocalContext.current
+    val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            // persist the grant, or it dies on reboot and downloads start failing
+            runCatching {
+                ctx.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            vm.setDownloadTree(uri.toString())
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Account", style = MaterialTheme.typography.titleMedium)
@@ -866,6 +887,18 @@ fun SettingsScreen(vm: MainViewModel) {
         }
         Text("Grid columns: $columns", style = MaterialTheme.typography.titleMedium)
         Slider(value = columns.toFloat(), onValueChange = { vm.setColumns(it.toInt()) }, valueRange = 2f..5f, steps = 2)
+        Text("Download location", style = MaterialTheme.typography.titleMedium)
+        val tree by vm.downloadTree.collectAsState(initial = null)
+        Text(
+            tree?.let { "Saving to your chosen folder" } ?: "Saving to the Downloads folder",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { treePicker.launch(null) }) { Text("Choose folder") }
+            if (tree != null) {
+                TextButton(onClick = { vm.setDownloadTree(null) }) { Text("Use Downloads") }
+            }
+        }
         Text("Blacklisted tags (comma separated)", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(value = blText, onValueChange = { blText = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("e.g. ai_generated, comic") })
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -905,7 +938,7 @@ fun ViewerDialog(post: Post, vm: MainViewModel, ensureNotif: () -> Unit, onSearc
                         msg = null; done = 0; total = -1
                         scope.launch {
                             try {
-                                val bytes = ctx.downloadPost(p, mediaUrl) { d, t -> done = d; total = t }
+                                val bytes = ctx.downloadPost(p, mediaUrl, { d, t -> done = d; total = t }, vm.downloadTreeUri())
                                 msg = "Saved %.1f MB".format(bytes / 1048576.0)
                             } catch (e: Exception) {
                                 msg = "Failed: ${e.message}"

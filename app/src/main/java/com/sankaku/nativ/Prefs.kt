@@ -33,6 +33,8 @@ object PrefKeys {
     // sankakuapi.com rejects the login-host token with common_unauthorized, so it
     // needs its own; without it the app can only ever load page 1.
     val apiToken = stringPreferencesKey("api_token")
+    // SAF tree uri the user picked; empty means the stock Downloads folder
+    val downloadTree = stringPreferencesKey("download_tree")
 }
 
 @Serializable
@@ -76,6 +78,9 @@ class PrefsStore(private val ctx: Context) {
     }
     val apiTokenFlow: Flow<String?> = ctx.dataStore.data.map {
         it[PrefKeys.apiToken]?.takeIf { t -> t.isNotBlank() }
+    }
+    val downloadTree: Flow<String?> = ctx.dataStore.data.map {
+        it[PrefKeys.downloadTree]?.takeIf { t -> t.isNotBlank() }
     }
 
     suspend fun setTheme(v: String) { ctx.dataStore.edit { it[PrefKeys.theme] = v } }
@@ -134,6 +139,12 @@ class PrefsStore(private val ctx: Context) {
     /** Mints the sankakuapi.com token from the same credentials. */
     suspend fun saveApiToken(token: String) {
         ctx.dataStore.edit { it[PrefKeys.apiToken] = token }
+    }
+
+    suspend fun setDownloadTree(uri: String?) {
+        ctx.dataStore.edit {
+            if (uri == null) it.remove(PrefKeys.downloadTree) else it[PrefKeys.downloadTree] = uri
+        }
     }
 
     suspend fun clearAccount() {

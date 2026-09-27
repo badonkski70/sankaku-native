@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.Dispatchers
@@ -29,17 +30,20 @@ private fun mimeOf(ext: String) = when (ext.lowercase()) {
     else -> "application/octet-stream"
 }
 
-/** In-app download with progress. Returns (content uri, bytes), throws otherwise. */
+/** In-app download with progress. Returns (content uri, bytes), throws otherwise.
+ *  [tree] is a SAF directory the user picked; null means the stock Downloads folder,
+ *  which MediaStore owns — it cannot write anywhere else. */
 suspend fun Context.fetchToDownloads(
     url: String,
     filename: String,
     mime: String,
     onProgress: (done: Long, total: Long) -> Unit,
+    tree: Uri? = null,
 ): Pair<Uri, Long> = withContext(Dispatchers.IO) {
     var last: Exception? = null
     repeat(2) {
         try {
-            return@withContext downloadOnce(url, filename, mime, onProgress)
+            return@withContext downloadOnce(url, filename, mime, onProgress, tree)
         } catch (e: Exception) {
             last = e
         }
@@ -47,24 +51,36 @@ suspend fun Context.fetchToDownloads(
     throw last!!
 }
 
+private fun Context.createInDownloads(filename: String, mime: String): Uri {
+    val values = ContentValues().apply {
+        put(MediaStore.Downloads.DISPLAY_NAME, filename)
+        put(MediaStore.Downloads.MIME_TYPE, mime)
+        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+    }
+    return contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+        ?: throw java.io.IOException("mediastore insert failed")
+}
+
+/** User-picked folder. Uses the framework call directly rather than pulling in
+ *  androidx.documentfile just for createFile. */
+private fun Context.createInTree(tree: Uri, filename: String, mime: String): Uri =
+    DocumentsContract.createDocument(contentResolver, tree, mime, filename)
+        ?: throw java.io.IOException("could not create $filename in that folder")
+
 private fun Context.downloadOnce(
     url: String,
     filename: String,
     mime: String,
     onProgress: (Long, Long) -> Unit,
+    tree: Uri?,
 ): Pair<Uri, Long> {
     val req = Request.Builder().url(url).header("User-Agent", "SankakuNative/0.1").build()
     dlClient.newCall(req).execute().use { res ->
         if (!res.isSuccessful) throw java.io.IOException("HTTP ${res.code}")
         val body = res.body ?: throw java.io.IOException("empty body")
         val total = body.contentLength()
-        val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, filename)
-            put(MediaStore.Downloads.MIME_TYPE, mime)
-            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-        }
-        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: throw java.io.IOException("mediastore failed")
+        val uri = if (tree != null) createInTree(tree, filename, mime)
+        else createInDownloads(filename, mime)
         var done = 0L
         try {
             contentResolver.openOutputStream(uri)?.use { out ->
@@ -80,7 +96,7 @@ private fun Context.downloadOnce(
                 }
             } ?: throw java.io.IOException("open failed")
         } catch (e: Exception) {
-            contentResolver.delete(uri, null, null)
+            runCatching { if (tree != null) DocumentsContract.deleteDocument(contentResolver, uri) else contentResolver.delete(uri, null, null) }
             throw e
         }
         return uri to done
@@ -99,7 +115,12 @@ fun Context.ensureDlChannel() {
 }
 
 /** Download with system notification (progress → complete/failed, tap to open). */
-suspend fun Context.downloadPost(post: Post, url: String, onProgress: (Long, Long) -> Unit): Long {
+suspend fun Context.downloadPost(
+    post: Post,
+    url: String,
+    onProgress: (Long, Long) -> Unit,
+    tree: Uri? = null,
+): Long {
     ensureDlChannel()
     val nm = dlNotify()
     val nid = post.id.hashCode()
@@ -112,7 +133,7 @@ suspend fun Context.downloadPost(post: Post, url: String, onProgress: (Long, Lon
     nm.notify(nid, ongoing.setProgress(0, 0, true).build())
     var lastT = 0L
     try {
-        val (uri, bytes) = fetchToDownloads(url, filename, mime) { d, t ->
+        val (uri, bytes) = fetchToDownloads(url, filename, mime, { d, t ->
             onProgress(d, t)
             val now = System.currentTimeMillis()
             if (now - lastT > 500) {
@@ -123,7 +144,7 @@ suspend fun Context.downloadPost(post: Post, url: String, onProgress: (Long, Lon
                         .setContentText(if (t > 0) "$pct%" else "${d / 1024} KB").build(),
                 )
             }
-        }
+        }, tree)
         val open = PendingIntent.getActivity(
             this, nid,
             Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
