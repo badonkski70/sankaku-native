@@ -36,11 +36,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ExitToApp
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.animation.graphics.ExperimentalAnimationGraphicsApi
+import androidx.compose.animation.graphics.res.animatedVectorResource
+import androidx.compose.animation.graphics.res.rememberAnimatedVectorPainter
+import androidx.compose.animation.graphics.vector.AnimatedImageVector
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -269,6 +268,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalAnimationGraphicsApi::class)
 @Composable
 fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
     var tab by remember { mutableStateOf(0) }
@@ -291,15 +291,22 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
         bottomBar = {
             NavigationBar {
                 listOf(
-                    "Browse" to Icons.Filled.Search,
-                    "Favorites" to Icons.Filled.Favorite,
-                    "Downloads" to Icons.AutoMirrored.Filled.ExitToApp,
-                    "Settings" to Icons.Filled.Settings,
-                ).forEachIndexed { i, (label, icon) ->
+                    "Browse" to R.drawable.anim_nav_browse,
+                    "Favorites" to R.drawable.anim_nav_favorites,
+                    "Downloads" to R.drawable.anim_nav_downloads,
+                    "Settings" to R.drawable.anim_nav_settings,
+                ).forEachIndexed { i, (label, res) ->
+                    val selected = tab == i
+                    val anim = AnimatedImageVector.animatedVectorResource(res)
                     NavigationBarItem(
-                        selected = tab == i,
+                        selected = selected,
                         onClick = { tab = i },
-                        icon = { Icon(icon, contentDescription = label) },
+                        icon = {
+                            Icon(
+                                painter = rememberAnimatedVectorPainter(anim, selected),
+                                contentDescription = label,
+                            )
+                        },
                         label = { Text(label) },
                     )
                 }

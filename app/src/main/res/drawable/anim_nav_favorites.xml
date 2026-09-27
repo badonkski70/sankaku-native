@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nav icon: a deflated heart fills out. One M + six C + Z in both states. -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+    <aapt:attr name="android:drawable">
+        <vector
+            android:width="24dp"
+            android:height="24dp"
+            android:viewportWidth="24"
+            android:viewportHeight="24">
+            <group
+                android:name="root"
+                android:pivotX="12"
+                android:pivotY="12">
+                <path
+                    android:name="icon"
+                    android:fillColor="#FF000000"
+                    android:pathData="M12,19.6 C7.2,15.9 4,13 4,9.9 C4,7.6 5.7,5.9 7.7,5.9 C9.4,5.9 10.8,7 12,8.4 C13.2,7 14.6,5.9 16.3,5.9 C18.3,5.9 20,7.6 20,9.9 C20,13 16.8,15.9 12,19.6 Z" />
+            </group>
+        </vector>
+    </aapt:attr>
+    <target android:name="icon">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="pathData"
+                android:duration="300"
+                android:interpolator="@android:interpolator/fast_out_slow_in"
+                android:valueFrom="M12,19.6 C7.2,15.9 4,13 4,9.9 C4,7.6 5.7,5.9 7.7,5.9 C9.4,5.9 10.8,7 12,8.4 C13.2,7 14.6,5.9 16.3,5.9 C18.3,5.9 20,7.6 20,9.9 C20,13 16.8,15.9 12,19.6 Z"
+                android:valueTo="M12,20.5 C6.6,16.4 3,13.2 3,9.6 C3,7 5,5 7.4,5 C9.4,5 11,6.2 12,7.8 C13,6.2 14.6,5 16.6,5 C19,5 21,7 21,9.6 C21,13.2 17.4,16.4 12,20.5 Z"
+                android:valueType="pathType" />
+        </aapt:attr>
+    </target>
+    <target android:name="root">
+        <aapt:attr name="android:animation">
+            <set>
+                <objectAnimator
+                    android:propertyName="scaleX"
+                    android:duration="66"
+                    android:interpolator="@android:interpolator/fast_out_slow_in"
+                    android:valueFrom="0" android:valueTo="0" android:valueType="floatType" />
+                <objectAnimator
+                    android:propertyName="scaleX"
+                    android:duration="100"
+                    android:startOffset="66"
+                    android:interpolator="@android:anim/decelerate_interpolator"
+                    android:valueFrom="0" android:valueTo="1" android:valueType="floatType" />
+                <objectAnimator
+                    android:propertyName="scaleY"
+                    android:duration="66"
+                    android:interpolator="@android:interpolator/fast_out_slow_in"
+                    android:valueFrom="0" android:valueTo="0" android:valueType="floatType" />
+                <objectAnimator
+                    android:propertyName="scaleY"
+                    android:duration="100"
+                    android:startOffset="66"
+                    android:interpolator="@android:anim/decelerate_interpolator"
+                    android:valueFrom="0" android:valueTo="1" android:valueType="floatType" />
+            </set>
+        </aapt:attr>
+    </target>
+</animated-vector>

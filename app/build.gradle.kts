@@ -36,6 +36,7 @@ dependencies {
     implementation(libs.lifecycle.viewmodel)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
+    implementation(libs.compose.animation.graphics)
     implementation(libs.compose.material3)
     implementation(libs.paging.runtime)
     implementation(libs.paging.compose)
