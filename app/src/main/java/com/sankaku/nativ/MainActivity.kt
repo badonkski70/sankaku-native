@@ -36,10 +36,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -284,10 +290,19 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
         },
         bottomBar = {
             NavigationBar {
-                NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = {}, label = { Text("Browse") })
-                NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = {}, label = { Text("Favorites") })
-                NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = {}, label = { Text("Downloads") })
-                NavigationBarItem(selected = tab == 3, onClick = { tab = 3 }, icon = {}, label = { Text("Settings") })
+                listOf(
+                    "Browse" to Icons.Filled.Search,
+                    "Favorites" to Icons.Filled.Favorite,
+                    "Downloads" to Icons.AutoMirrored.Filled.ExitToApp,
+                    "Settings" to Icons.Filled.Settings,
+                ).forEachIndexed { i, (label, icon) ->
+                    NavigationBarItem(
+                        selected = tab == i,
+                        onClick = { tab = i },
+                        icon = { Icon(icon, contentDescription = label) },
+                        label = { Text(label) },
+                    )
+                }
             }
         },
     ) { pad ->
