@@ -172,7 +172,7 @@ suspend fun Context.downloadPost(
         nm.notify(
             nid, NotificationCompat.Builder(this, DL_CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_warning)
-                .setContentTitle("Download failed").setContentText(e.message)
+                .setContentTitle("Download failed").setContentText(e.shortMessage())
                 .setAutoCancel(true).build(),
         )
         throw e

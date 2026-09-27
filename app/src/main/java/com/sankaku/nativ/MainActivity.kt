@@ -194,7 +194,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 android.util.Log.i("SankakuAuth", "api login: refresh_token present=${res.refreshToken.isNotBlank()}")
                 authBump.value += 1
             }
-            .onFailure { apiTokenError = it.message ?: "sign-in failed" }
+            .onFailure { apiTokenError = it.shortMessage() }
     }
 
     var apiTokenError by mutableStateOf<String?>(null)
@@ -262,7 +262,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }.getOrDefault("")
                 loginError.value = "Login failed (HTTP ${e.code()}${if (code.isNotBlank()) ": $code" else ""})"
             } catch (e: Exception) {
-                loginError.value = "Login failed: ${e.message}"
+                loginError.value = "Login failed: ${e.shortMessage()}"
             }
         }
     }
@@ -385,7 +385,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }, downloadTreeUri())
             _dl.value = DlState(message = "Saved %.1f MB".format(bytes / 1048576.0))
         } catch (e: Exception) {
-            _dl.value = DlState(message = "Failed: ${e.message}")
+            _dl.value = DlState(message = "Failed: ${e.shortMessage()}")
         }
     }
 
@@ -701,8 +701,17 @@ private fun PagingError(items: LazyPagingItems<Post>, modifier: Modifier = Modif
 
 private fun Throwable.messageOrDetail(): String = when (this) {
     is HttpException -> "HTTP ${code()}"
-    is IOException -> message ?: "no connection"
-    else -> message ?: javaClass.simpleName
+    is IOException -> shortMessage()
+    else -> shortMessage()
+}
+
+/**
+ * Exception messages can be enormous — a whole serialised Post once landed in a
+ * Text and filled the screen. Cap anything heading for the UI or a notification.
+ */
+internal fun Throwable.shortMessage(max: Int = 160): String {
+    val m = message?.trim()?.takeIf { it.isNotEmpty() } ?: javaClass.simpleName
+    return if (m.length <= max) m else m.take(max - 1).trimEnd() + '…'
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
