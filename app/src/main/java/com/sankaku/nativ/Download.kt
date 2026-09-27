@@ -153,7 +153,6 @@ fun extOf(post: Post) = post.fileExt.ifEmpty { "bin" }
 fun mimeOfPost(post: Post) = mimeOf(extOf(post))
 
 private const val TAG_ARTIST = 1
-private const val TAG_COPYRIGHT = 3
 private const val TAG_CHARACTER = 4
 
 /** Display form of the first tag of [type]; nameEn reads "Letho Rin", tagName "letho_rin". */
@@ -164,18 +163,17 @@ private fun Post.tagOfType(type: Int): String? =
         ?.takeIf { it.isNotEmpty() }
 
 /**
- * "artist - character.ext", e.g. "goon - el goonio.mp4". Falls back to the
- * copyright tag, then the post id, so a file is never nameless.
+ * "artist - character.ext" (e.g. "goon - el goonio.mp4") only when both tags are
+ * there; anything less falls back to the default sankaku-<id>.<ext>.
  */
 fun downloadName(post: Post): String {
-    val label = listOfNotNull(post.tagOfType(TAG_ARTIST), post.tagOfType(TAG_CHARACTER))
-        .joinToString(" - ")
-        .ifBlank { post.tagOfType(TAG_COPYRIGHT) ?: post.id }
-    val safe = label
+    val fallback = "sankaku-${post.id}.${extOf(post)}"
+    val artist = post.tagOfType(TAG_ARTIST) ?: return fallback
+    val character = post.tagOfType(TAG_CHARACTER) ?: return fallback
+    val label = "$artist - $character"
         .replace(Regex("""[\\/:*?"<>|]"""), "")
         .replace(Regex("""\s+"""), " ")
         .trim()
         .take(80)
-        .ifBlank { post.id }
-    return "$safe.${extOf(post)}"
+    return if (label.trim('-', ' ').isBlank()) fallback else "$label.${extOf(post)}"
 }
