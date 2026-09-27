@@ -4,25 +4,24 @@
 
 None of these have been run.
 
-1. **Favourite 10–12 posts in one go.** Each is a separate API call, so this
-   was the way to find out whether Sankaku rate-limits us. **Passed** — 13 at
-   once, no failures, no rate limiting.
-
-2. **Try to download something undownloadable** — an old or deleted post.
+1. **Try to download something undownloadable** — an old or deleted post.
    The URL will 404. Expect a clean "Download failed" notification, no hang
    or crash. Also exercises the new message capping.
 
-3. **Start a download, then force-stop the app.** Downloads run in the
+2. **Start a download, then force-stop the app.** Downloads run in the
    ViewModel, which dies with the process, so a partial file may be left.
    A design limit rather than a bug, but worth knowing.
 
-4. **Sign in by pasting a token rather than using a password.** No password
+3. **Sign in by pasting a token rather than using a password.** No password
    means the app cannot obtain its second token by itself. Settings should
    prompt for one to "enable full browsing"; if the prompt is missing or
    confusing, that needs fixing.
 
 ## Fixed
 
+- ~~Favouriting 10+ posts might hit a rate limit or fail silently.~~ 13 in
+  one go: no failures, no rate limiting. Sequential calls are fine at this
+  scale.
 - ~~A custom download folder can lose its permission across a reboot.~~
   Tested with a real reboot: the grant survives, no re-picking needed.
 - ~~Token refresh was a silent dead end.~~ The refresh token
