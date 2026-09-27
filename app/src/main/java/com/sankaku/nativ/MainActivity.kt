@@ -119,6 +119,14 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
+/** Progress of the single download running in the ViewModel. */
+data class DlState(
+    val running: Boolean = false,
+    val done: Long = 0,
+    val total: Long = -1,
+    val message: String? = null,
+)
+
 /** Downloads held pending confirmation, and the entries they look like. */
 data class DupPrompt(
     val posts: List<Post>,
@@ -317,6 +325,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun downloadTreeUri(): Uri? =
         prefs.downloadTree.first()?.let { runCatching { Uri.parse(it) }.getOrNull() }
 
+    /**
+     * Downloads run in viewModelScope, not a composable scope: closing the viewer
+     * or the selection bar used to cancel the coroutine mid-write and delete the
+     * partial file (LeftCompositionCancellationException).
+     */
+    private val _dl = MutableStateFlow(DlState())
+    val dl: StateFlow<DlState> = _dl
+
+    private fun app() = getApplication<Application>()
+
+    fun startDownload(post: Post, url: String) = viewModelScope.launch {
+        _dl.value = DlState(running = true)
+        try {
+            val bytes = app().downloadPost(post, url, { d, t ->
+                _dl.value = _dl.value.copy(done = d, total = t)
+            }, downloadTreeUri())
+            _dl.value = DlState(message = "Saved %.1f MB".format(bytes / 1048576.0))
+        } catch (e: Exception) {
+            _dl.value = DlState(message = "Failed: ${e.message}")
+        }
+    }
+
+    fun startBatch(posts: List<Post>, onDone: (ok: Int, total: Int) -> Unit) =
+        viewModelScope.launch {
+            val tree = downloadTreeUri()
+            // ponytail: sequential so a big pick doesn't hammer the server;
+            // a real queue if this ever gets long
+            var ok = 0
+            posts.forEach { p ->
+                runCatching {
+                    app().downloadPost(p, p.fileUrl.ifEmpty { p.bestUrl }, { _, _ -> }, tree)
+                }.onSuccess { ok++ }
+            }
+            onDone(ok, posts.size)
+        }
+
     fun requestDownload(posts: List<Post>, download: (List<Post>) -> Unit) {
         val dupes = similarDownloads(posts)
         val heldIds = dupes.map { it.first.id }.toSet()
@@ -420,20 +464,12 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
                         picking.clear()
                         ensureNotif()
                         vm.requestDownload(list) { batch ->
-                            scope.launch {
-                                // ponytail: sequential so a big pick doesn't hammer
-                                // the server; a queue if this ever gets long
-                                val tree = vm.downloadTreeUri()
-                                var ok = 0
-                                batch.forEach { p ->
-                                    runCatching {
-                                        ctx.downloadPost(p, p.fileUrl.ifEmpty { p.bestUrl }, { _, _ -> }, tree)
-                                    }.onSuccess { ok++ }
+                            vm.startBatch(batch) { ok, total ->
+                                scope.launch {
+                                    snackbar.showSnackbar(
+                                        if (ok == total) "Downloaded $total" else "Downloaded $ok of $total"
+                                    )
                                 }
-                                snackbar.showSnackbar(
-                                    if (ok == batch.size) "Downloaded ${batch.size}"
-                                    else "Downloaded $ok of ${batch.size}"
-                                )
                             }
                         }
                     },
@@ -919,10 +955,10 @@ fun ViewerDialog(post: Post, vm: MainViewModel, ensureNotif: () -> Unit, onSearc
     val favs by vm.favList.collectAsState()
     val isFav = favs.any { it.id == post.id }
     val mediaUrl = post.fileUrl.ifEmpty { post.bestUrl }
-    val scope = rememberCoroutineScope()
-    var done by remember(post.id) { mutableLongStateOf(-1L) }
-    var total by remember(post.id) { mutableLongStateOf(-1L) }
-    var msg by remember(post.id) { mutableStateOf<String?>(null) }
+    val dl by vm.dl.collectAsState()
+    val done = if (dl.running) dl.done else -1L
+    val total = dl.total
+    val msg = dl.message
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
@@ -935,16 +971,7 @@ fun ViewerDialog(post: Post, vm: MainViewModel, ensureNotif: () -> Unit, onSearc
                     ensureNotif()
                     vm.requestDownload(listOf(post)) { batch ->
                         val p = batch.first()
-                        msg = null; done = 0; total = -1
-                        scope.launch {
-                            try {
-                                val bytes = ctx.downloadPost(p, mediaUrl, { d, t -> done = d; total = t }, vm.downloadTreeUri())
-                                msg = "Saved %.1f MB".format(bytes / 1048576.0)
-                            } catch (e: Exception) {
-                                msg = "Failed: ${e.message}"
-                            }
-                            done = -1
-                        }
+                        vm.startDownload(p, mediaUrl)
                     }
                 }) { Text("Download", color = Color.White) }
                 TextButton(onClick = { ctx.openUrl(mediaUrl) }) { Text("Open", color = Color.White) }

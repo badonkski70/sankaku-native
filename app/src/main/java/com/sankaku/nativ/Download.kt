@@ -61,11 +61,19 @@ private fun Context.createInDownloads(filename: String, mime: String): Uri {
         ?: throw java.io.IOException("mediastore insert failed")
 }
 
-/** User-picked folder. Uses the framework call directly rather than pulling in
- *  androidx.documentfile just for createFile. */
-private fun Context.createInTree(tree: Uri, filename: String, mime: String): Uri =
-    DocumentsContract.createDocument(contentResolver, tree, mime, filename)
-        ?: throw java.io.IOException("could not create $filename in that folder")
+/**
+ * User-picked folder. The picker hands back a *tree* uri, but createDocument needs
+ * the document uri of the folder itself — providers reject the tree form.
+ * Uses the framework call directly rather than pulling in androidx.documentfile.
+ */
+private fun Context.createInTree(tree: Uri, filename: String, mime: String): Uri {
+    val parent = DocumentsContract.buildDocumentUriUsingTree(
+        tree,
+        DocumentsContract.getTreeDocumentId(tree),
+    )
+    return DocumentsContract.createDocument(contentResolver, parent, mime, filename)
+        ?: throw java.io.IOException("provider declined to create $filename in that folder")
+}
 
 private fun Context.downloadOnce(
     url: String,
@@ -160,6 +168,7 @@ suspend fun Context.downloadPost(
         PrefsStore(this).addHistory(DlEntry(post.id, filename, mime, uri.toString(), bytes, System.currentTimeMillis()))
         return bytes
     } catch (e: Exception) {
+        android.util.Log.w("SankakuDl", "download failed: ${e::class.java.name}: ${e.message}", e)
         nm.notify(
             nid, NotificationCompat.Builder(this, DL_CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_warning)
