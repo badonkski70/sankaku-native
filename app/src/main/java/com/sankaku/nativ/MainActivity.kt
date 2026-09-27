@@ -274,6 +274,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         history.map { disambiguate(it) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap<String, String>() to 0)
 
+    /**
+     * Warn at download time, not only when the Downloads tab is opened — by
+     * then you've forgotten which two files clashed. Null when nothing clashes.
+     */
+    fun duplicateWarning(filenames: List<String>): String? {
+        if (filenames.isEmpty()) return null
+        val taken = history.value.map { it.filename.substringBeforeLast('.', it.filename) }.toSet()
+        val clashes = filenames.count { it.substringBeforeLast('.', it) in taken }
+        return when (clashes) {
+            0 -> null
+            filenames.size -> "All ${filenames.size} shared a name and were numbered — see Downloads"
+            else -> "$clashes of ${filenames.size} shared a name and were numbered — see Downloads"
+        }
+    }
+
     fun toggleFav(post: Post) = viewModelScope.launch {
         val wasFav = favList.value.any { it.id == post.id }
         prefs.toggleFav(post)
@@ -371,8 +386,9 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
                                 }.onSuccess { ok++ }
                             }
                             snackbar.showSnackbar(
-                                if (ok == list.size) "Downloaded ${list.size}"
-                                else "Downloaded $ok of ${list.size}"
+                                vm.duplicateWarning(list.map { downloadName(it) })
+                                    ?: if (ok == list.size) "Downloaded ${list.size}"
+                                    else "Downloaded $ok of ${list.size}"
                             )
                         }
                     },
@@ -814,7 +830,12 @@ fun ViewerDialog(post: Post, vm: MainViewModel, ensureNotif: () -> Unit, onSearc
                     scope.launch {
                         try {
                             val bytes = ctx.downloadPost(post, mediaUrl) { d, t -> done = d; total = t }
-                            msg = "Saved %.1f MB".format(bytes / 1048576.0)
+                            msg = buildString {
+                                append("Saved %.1f MB".format(bytes / 1048576.0))
+                                vm.duplicateWarning(listOf(downloadName(post)))?.let {
+                                    append(" • ").append(it)
+                                }
+                            }
                         } catch (e: Exception) {
                             msg = "Failed: ${e.message}"
                         }
