@@ -119,9 +119,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
-/** A download blocked pending confirmation: the names and the entries they match. */
+/** Downloads held pending confirmation, and the entries they look like. */
 data class DupPrompt(
-    val names: List<String>,
+    val posts: List<Post>,
     val matches: List<DlEntry>,
     val proceed: () -> Unit,
 )
@@ -287,7 +287,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * does. Name alone is too eager (same artist+character is common); size alone
      * is no signal at all.
      */
-    private fun similarDownloads(posts: List<Post>): List<Pair<String, DlEntry>> {
+    private fun similarDownloads(posts: List<Post>): List<Pair<Post, DlEntry>> {
         val existing = history.value
         return posts.mapNotNull { p ->
             if (p.fileSize <= 0) return@mapNotNull null
@@ -299,7 +299,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // the same file lands within a percent, a different file does not
                     kotlin.math.abs(e.bytes - p.fileSize) <= maxOf(64L * 1024, p.fileSize / 50)
             }
-            hit?.let { name to it }
+            hit?.let { p to it }
         }
     }
 
@@ -308,11 +308,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun confirmDup() { _dupPrompt.value?.let { it.proceed() }; _dupPrompt.value = null }
     fun cancelDup() { _dupPrompt.value = null }
 
-    /** Runs [proceed] immediately unless something similar is already downloaded. */
-    fun requestDownload(posts: List<Post>, proceed: () -> Unit) {
+    /**
+     * Splits the batch: anything that isn't a near-duplicate of something already
+     * downloaded goes straight to [download]; only the duplicates wait on the
+     * dialog, so two clashing files never hold up the other eight.
+     */
+    fun requestDownload(posts: List<Post>, download: (List<Post>) -> Unit) {
         val dupes = similarDownloads(posts)
-        if (dupes.isEmpty()) proceed()
-        else _dupPrompt.value = DupPrompt(dupes.map { it.first }, dupes.map { it.second }, proceed)
+        val heldIds = dupes.map { it.first.id }.toSet()
+        val clean = posts.filterNot { it.id in heldIds }
+        if (clean.isNotEmpty()) download(clean)
+        if (dupes.isNotEmpty()) {
+            val held = dupes.map { it.first }
+            _dupPrompt.value = DupPrompt(held, dupes.map { it.second }) { download(held) }
+        }
     }
 
     fun toggleFav(post: Post) = viewModelScope.launch {
@@ -402,19 +411,19 @@ fun MainScreen(vm: MainViewModel, ensureNotif: () -> Unit) {
                         val list = chosen
                         picking.clear()
                         ensureNotif()
-                        vm.requestDownload(list) {
+                        vm.requestDownload(list) { batch ->
                             scope.launch {
                                 // ponytail: sequential so a big pick doesn't hammer
                                 // the server; a queue if this ever gets long
                                 var ok = 0
-                                list.forEach { p ->
+                                batch.forEach { p ->
                                     runCatching {
                                         ctx.downloadPost(p, p.fileUrl.ifEmpty { p.bestUrl }) { _, _ -> }
                                     }.onSuccess { ok++ }
                                 }
                                 snackbar.showSnackbar(
-                                    if (ok == list.size) "Downloaded ${list.size}"
-                                    else "Downloaded $ok of ${list.size}"
+                                    if (ok == batch.size) "Downloaded ${batch.size}"
+                                    else "Downloaded $ok of ${batch.size}"
                                 )
                             }
                         }
@@ -479,12 +488,12 @@ private fun DupDialog(vm: MainViewModel) {
     val p = prompt ?: return
     AlertDialog(
         onDismissRequest = { vm.cancelDup() },
-        title = { Text(if (p.names.size == 1) "Already downloaded" else "Similar files already downloaded") },
+        title = { Text(if (p.posts.size == 1) "Already downloaded" else "Similar files already downloaded") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                p.names.zip(p.matches).forEach { (name, hit) ->
+                p.posts.zip(p.matches).forEach { (post, hit) ->
                     Column {
-                        Text(name, style = MaterialTheme.typography.bodyMedium)
+                        Text(downloadName(post), style = MaterialTheme.typography.bodyMedium)
                         Text(
                             "%.1f MB • %s".format(
                                 hit.bytes / 1048576.0,
@@ -498,14 +507,14 @@ private fun DupDialog(vm: MainViewModel) {
                     }
                 }
                 Text(
-                    if (p.names.size == 1) "Save it again?"
-                    else "Save ${p.names.size} files anyway?",
+                    if (p.posts.size == 1) "Save it again?"
+                    else "Save these ${p.posts.size} anyway?",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
         },
         confirmButton = { TextButton(onClick = { vm.confirmDup() }) { Text("Save again") } },
-        dismissButton = { TextButton(onClick = { vm.cancelDup() }) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = { vm.cancelDup() }) { Text("Skip") } },
     )
 }
 
@@ -891,11 +900,12 @@ fun ViewerDialog(post: Post, vm: MainViewModel, ensureNotif: () -> Unit, onSearc
                 TextButton(onClick = { vm.toggleFav(post) }) { Text(if (isFav) "♥" else "♡", color = Color.White) }
                 TextButton(onClick = {
                     ensureNotif()
-                    vm.requestDownload(listOf(post)) {
+                    vm.requestDownload(listOf(post)) { batch ->
+                        val p = batch.first()
                         msg = null; done = 0; total = -1
                         scope.launch {
                             try {
-                                val bytes = ctx.downloadPost(post, mediaUrl) { d, t -> done = d; total = t }
+                                val bytes = ctx.downloadPost(p, mediaUrl) { d, t -> done = d; total = t }
                                 msg = "Saved %.1f MB".format(bytes / 1048576.0)
                             } catch (e: Exception) {
                                 msg = "Failed: ${e.message}"
