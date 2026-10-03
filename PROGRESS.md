@@ -43,6 +43,7 @@ not merely built:
 - Rotation, forced over adb: search text, selected tab, a 2-post selection,
   the open post, the duplicate dialog, settings fields, zoom and video
   position all survive
+- Browse grid scroll position across rotation and tab switch, ~20 swipes deep
 - A forced 401, by corrupting the stored token in the DataStore
 
 **Not verified:** downloading something that 404s, force-stopping mid-download,
@@ -79,7 +80,18 @@ silently never worked.
 - **Test API behaviour from the device, not from this machine.** Several auth
   probes to `sankakuapi.com` got this host's IP blocked; requests now fail to
   connect while ordinary browsing is fine. The phone is unaffected. The app's
-  own `adb logcat` is the best signal available.
+  own `adb logcat` is the best signal available. Two more things learned doing
+  this: the API **hangs up on a non-browser User-Agent** (curl's default gets
+  an empty reply; `SankakuNative/0.1` or a Chrome UA gets 200), and it answers
+  200 anonymously, which is enough for anything that is not account-specific.
+- **Unknown `order:` tags are silently ignored, not rejected.** Verified on
+  device against the live API: `order:oldest`, `order:asc`, `order:date:asc`,
+  `order:created_at:asc`, `order:date_asc`, `order:date-asc` and the `order=`
+  and `sort=` query params all return a page **byte-identical to the default**.
+  So a sort chip wired to a guessed tag looks completely real and sorts nothing.
+  There is no oldest-first: `order:date` is newest-first and nothing reverses
+  it. Post ids are obfuscated when signed in, so order cannot be eyeballed from
+  the grid — read `created_at.s` off the JSON instead.
 - **To force a 401:** stop the app, pull
   `files/datastore/settings.preferences_pb` with `run-as`, overwrite just the
   `api_token` JWT bytes with the same number of `x` characters (keeps the

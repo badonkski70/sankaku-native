@@ -30,6 +30,15 @@ None of these have been run.
   session. Worse, refreshing the login host's token revokes the api token,
   so the attempt was actively harmful. All of it is deleted; a 401 now just
   asks for the password, and the banner is tappable.
+- ~~The Browse grid reset its scroll position on every rotation and tab
+  switch.~~ It had no list state at all — the grid was built with no `state`
+  parameter, so the position lived and died with the composable. The index now
+  lives in the ViewModel. Verified on device by fingerprinting the post ids
+  the grid shows (`uiautomator dump`, first id on screen): holds across a tab
+  round-trip, a forced rotation and back, and all three again from about 20
+  swipes deep, where re-entry has to wait for paging to load up to the saved
+  index. A new search still starts at the top. Cold start still starts at the
+  top — the ViewModel dies with the process, which is a separate feature.
 - ~~Rotation lost everything in `remember`.~~ Now `rememberSaveable`
   throughout, verified on device: search text, selected tab, multi-select
   (a custom saver, since the maps hold whole `Post`s), the open post, the
@@ -39,6 +48,10 @@ None of these have been run.
 
 ## Code
 
+- **No oldest-first sort.** `order:date` (the "Newest" chip) works, but
+  nothing reverses it — see the trap in PROGRESS.md. If it is ever wanted it
+  has to be faked client-side, which paging makes awkward: the oldest posts are
+  the *last* pages, so it means walking to the end and reading backwards.
 - **No automated tests.** The download naming, duplicate split, name
   disambiguation and rating-tag logic are all pure functions and are the
   obvious place to start.

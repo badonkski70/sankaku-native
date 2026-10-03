@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.animation.graphics.ExperimentalAnimationGraphicsApi
@@ -76,6 +77,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.Saver
@@ -261,6 +263,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun search(tags: String) { query.value = tags.trim() }
+
+    /**
+     * Browse grid scroll index. Lives here, not in BrowseScreen, because the tab
+     * switch drops BrowseScreen from composition and takes any rememberSaveable
+     * with it — the grid needs its position to outlive the composable.
+     */
+    var browseIndex by mutableStateOf(0)
     fun setTheme(v: String) = viewModelScope.launch { prefs.setTheme(v) }
     fun toggleRating(r: String) = viewModelScope.launch {
         val cur = ratings.value.toMutableSet()
@@ -783,9 +792,16 @@ fun BrowseScreen(
         val order by vm.order.collectAsState()
         val media by vm.media.collectAsState()
         FilterRow("Order") {
+            // labelled "Newest" because that is what order:date actually returns:
+            // verified on device, 10:13 09:59 09:44 ... descending. There is no
+            // oldest-first. order:oldest / order:asc / order:date:asc and the
+            // order= / sort= params were all tried and every one returned a page
+            // byte-identical to the default -- the API ignores order values it
+            // does not know rather than erroring, so a guessed chip would look
+            // real and sort nothing.
             listOf(
                 "" to "Default",
-                "order:date" to "Date",
+                "order:date" to "Newest",
                 "order:popularity" to "Popularity",
             ).forEach { (v, label) ->
                 FilterChip(selected = order == v, onClick = { vm.setOrder(v) }, label = { Text(label) })
@@ -825,7 +841,34 @@ fun BrowseScreen(
             }
         }
         Box(Modifier.fillMaxSize()) {
-            LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(columns), modifier = Modifier.fillMaxSize()) {
+            // plain remember, not rememberLazyStaggeredGridState: the ViewModel index
+            // is the single source of truth, so no second restore fights it
+            val gridState = remember { LazyStaggeredGridState() }
+            var owed by remember { mutableStateOf(true) }
+
+            LaunchedEffect(gridState) {
+                // gated on `owed` — paging hands back a short list first and the grid
+                // clamps to it, so recording before the restore lands would overwrite
+                // the saved index with 0. snapshotFlow conflates, so the values during
+                // the catch-up are dropped rather than recorded.
+                snapshotFlow { if (owed) null else gridState.firstVisibleItemIndex }
+                    .collect { vm.browseIndex = it ?: return@collect }
+            }
+
+            // paging serves 40 at a time, so on re-entry the saved index may not exist
+            // yet; this re-runs each time more items arrive and jumps once it does
+            LaunchedEffect(items.itemCount) {
+                if (owed && items.itemCount > vm.browseIndex) {
+                    gridState.scrollToItem(vm.browseIndex)
+                    owed = false
+                }
+            }
+
+            LazyVerticalStaggeredGrid(
+                columns = StaggeredGridCells.Fixed(columns),
+                state = gridState,
+                modifier = Modifier.fillMaxSize(),
+            ) {
                 items(items.itemCount) { i ->
                     items[i]?.let { post ->
                         SelectableCard(post, post.id in picking, onOpen, onLongPress) {
